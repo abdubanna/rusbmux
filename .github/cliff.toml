@@ -103,15 +103,11 @@ commit_parsers = [
   { message = "^fix", group = "<!-- 01 -->Bug Fixes" },
   { message = "^docs?", group = "<!-- 02 -->Documentation" },
   { message = "^perf", group = "<!-- 03 -->Performance" },
-  { message = "^refactor", group = "<!-- 04 -->Refactoring" },
-  { message = "^test", group = "<!-- 05 -->Testing" },
-  { message = "^build", group = "<!-- 06 -->Build System" },
-  { message = "^ci", group = "<!-- 07 -->Continuous Integration" },
-  { message = "^revert", group = "<!-- 08 -->Reverts" },
-  { message = "^chore\\(release", skip = true },
-  { message = "^chore", group = "<!-- 9 -->Miscellaneous Tasks" },
-  { body = ".*security", group = "<!-- 10 -->Security" },
-  { message = ".*", group = "<!-- 11 -->Other Commits" },
+  { message = "^test", group = "<!-- 04 -->Testing" },
+  { message = "^ci", group = "<!-- 05 -->Continuous Integration" },
+  { message = "^revert", group = "<!-- 06 -->Reverts" },
+  { message = "^chore", group = "<!-- 07 -->Miscellaneous Tasks" },
+  { message = ".*", group = "<!-- 08 -->Other Commits" },
 ]
 topo_order_commits = true
 sort_commits = "newest"
