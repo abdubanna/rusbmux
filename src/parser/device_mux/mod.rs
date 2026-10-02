@@ -118,7 +118,12 @@ impl UsbDevicePacket {
         let payload_len = total_length - total_header_len;
 
         let mut payload = BytesMut::with_capacity(payload_len);
-        payload.resize(payload_len, 0);
+
+        // SAFETY: `read_exact` below overwrites every one of those bytes before `payload`
+        // is read
+        unsafe {
+            payload.set_len(payload_len);
+        }
 
         reader.read_exact(&mut payload).await?;
 
