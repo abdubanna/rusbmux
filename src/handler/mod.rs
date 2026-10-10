@@ -279,6 +279,7 @@ pub async fn send_result(
 }
 
 pub async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
+    // TODO: create the folder with 701 permissions
     tokio::fs::create_dir_all(LOCKDOWN_PATH)
         .await
         .inspect_err(|err| error!(LOCKDOWN_PATH, %err, "Failed to create the lockdown folder"))?;

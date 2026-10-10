@@ -11,6 +11,7 @@ pub async fn handle_listeners_list(
     writer: &mut impl AsyncWriting,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
+    // TODO: use get_hotplug_event_tx()
     let event_tx = HOTPLUG_EVENT_TX
         .get()
         .ok_or(RusbmuxError::HotPlugNotSupported)?;

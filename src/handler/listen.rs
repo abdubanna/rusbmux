@@ -10,6 +10,7 @@ use tokio::{io::AsyncWriteExt, sync::broadcast};
 use tracing::{debug, error, info, trace, warn};
 
 pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(), RusbmuxError> {
+    // TODO: use get_hotplug_event_tx()
     let mut event_receiver = match HOTPLUG_EVENT_TX
         .get()
         .ok_or(RusbmuxError::HotPlugNotSupported)

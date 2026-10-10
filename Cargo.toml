@@ -99,6 +99,7 @@ name = "rusbmux"
 required-features = ["bin"]
 
 [profile.release]
+# TODO: test if there's a difference in speed with other values
 opt-level = "s"
 lto = "fat"
 codegen-units = 1
