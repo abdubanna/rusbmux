@@ -62,6 +62,11 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
                 return Ok(());
             }
             debug!(udid, "Adding device anyway");
+
+            let _ = get_hotplug_event_tx()
+                .await
+                .send(DeviceEvent::Detached { id });
+
             CONNECTED_DEVICES.remove(&id)
         }
         None => None,
