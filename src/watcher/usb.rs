@@ -141,7 +141,7 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
             Ok(UsbEvent::Connected { device, id }) => {
                 if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
                     dev.as_network()
-                        .is_some_and(|_| dev.udid() == device.udid())
+                        .is_some_and(|ndev| ndev.udid == device.udid())
                 }) {
                     let _ = hotplug_event_tx.send(DeviceEvent::Detached { id: ndev.id() });
                 }
@@ -149,10 +149,9 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                 // A device may emit multiple connect events (especially during boot), and the
                 // initial connection may not receive a matching disconnect event. Remove any
                 // stale entry before registering the new connection.
-                CONNECTED_DEVICES
-                    .retain(|_, d| d.as_network().is_some() || d.udid() != device.udid());
+                CONNECTED_DEVICES.retain(|_, dev| dev.is_network() || dev.udid() != device.udid());
 
-                super::preflight::spawn(device.as_usb().unwrap().clone());
+                super::preflight::spawn(device.as_usb().unwrap().shared());
                 CONNECTED_DEVICES.insert(id, device);
 
                 let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });

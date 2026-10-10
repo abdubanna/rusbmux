@@ -1,11 +1,10 @@
 use std::sync::{
-    Arc, Weak,
+    Arc,
     atomic::{AtomicBool, AtomicU16, Ordering},
 };
 
 use bytes::Bytes;
 use crossfire::{AsyncRx, MAsyncTx, mpsc};
-use dashmap::DashMap;
 use etherparse::TcpHeader;
 use pack1::U16BE;
 use tokio::{io::AsyncWriteExt, task::JoinHandle};
@@ -30,22 +29,23 @@ pub struct IODisconnectedDevice {
     pub opaque_id: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct UsbDeviceShared {
+    pub core: DeviceCore,
+    pub router: Arc<PacketRouter>,
+    pub writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+    pub udid: String,
+}
+
 #[derive(Debug)]
 pub struct UsbDevice {
+    pub shared: UsbDeviceShared,
     pub handler: AnyDeviceHandle,
+
+    // TODO: store only what's needed to reduce struct's size
     pub info: AnyDeviceInfo,
-    pub udid: String,
-
-    pub core: DeviceCore,
-
-    pub next_source_port: AtomicU16,
 
     pub version: UsbDevicePacketVersion,
-
-    pub writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
-
-    pub router: Arc<PacketRouter>,
-    pub conns: DashMap<u16, Weak<UsbDeviceConn>>,
 
     reader_loop_handler: JoinHandle<()>,
     writer_loop_handler: JoinHandle<()>,
@@ -54,8 +54,6 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
-    const MAX_SOURCE_PORT_PROBES: u32 = 64;
-
     /// # Safety
     ///
     /// make sure you already sent the `UsbDevicePacketProtocol::Setup` packet
@@ -64,7 +62,7 @@ impl UsbDevice {
         id: u64,
         version: UsbDevicePacketVersion,
         disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
-    ) -> Result<Arc<Self>, RusbmuxError> {
+    ) -> Result<Self, RusbmuxError> {
         debug!(device_id = id, "Creating device from existing state");
         let udid = info
             .udid()
@@ -107,23 +105,23 @@ impl UsbDevice {
 
         debug!(device_id = id, "Device created");
 
-        Ok(Arc::new(Self {
+        Ok(Self {
+            shared: UsbDeviceShared {
+                core,
+                router,
+                writer_tx: tx,
+                udid,
+            },
             handler: device_handle,
             info,
-            udid,
-            core,
-            next_source_port: AtomicU16::new(1),
             version,
-            writer_tx: tx,
-            conns: DashMap::new(),
-            router,
             reader_loop_handler,
             writer_loop_handler,
             dropped: AtomicBool::new(false),
-        }))
+        })
     }
 
-    pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
+    pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Self, RusbmuxError> {
         Self::new_with_disconnect_tx(info, id, None).await
     }
 
@@ -131,7 +129,7 @@ impl UsbDevice {
         info: AnyDeviceInfo,
         id: u64,
         disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
-    ) -> Result<Arc<Self>, RusbmuxError> {
+    ) -> Result<Self, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
         let udid = info
             .udid()
@@ -211,20 +209,20 @@ impl UsbDevice {
 
         debug!(device_id = id, "Device created");
 
-        Ok(Arc::new(Self {
+        Ok(Self {
+            shared: UsbDeviceShared {
+                core,
+                router,
+                writer_tx: tx,
+                udid,
+            },
             handler: device_handle,
             info,
-            udid,
-            core,
-            next_source_port: AtomicU16::new(1),
             version,
-            writer_tx: tx,
-            conns: DashMap::new(),
-            router,
             reader_loop_handler,
             writer_loop_handler,
             dropped: AtomicBool::new(false),
-        }))
+        })
     }
 
     async fn start_reader_loop(
@@ -265,6 +263,7 @@ impl UsbDevice {
 
                 Err(err) => {
                     error!(target: "device_reader", device_id, %err, "Failed to read packet");
+                    // WARN: is it okay to continue?
                     continue;
                 }
             };
@@ -326,6 +325,8 @@ impl UsbDevice {
         info!(target: "device_writer", device_id, "Writer loop started");
 
         // starts at 1 because we sent the syn
+        //
+        // TODO: wrapping?
         let mut send_seq = 1;
 
         loop {
@@ -402,33 +403,34 @@ impl UsbDevice {
     }
 
     pub async fn connect(&self, destination_port: u16) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
-        let source_port = self.get_next_source_port()?;
+        let source_port = self.shared.router.get_next_source_port()?;
 
         debug!(
-            device_id = self.core.id,
+            device_id = self.shared.core.id,
             source_port, destination_port, "Creating new connection"
         );
 
-        let rx = self.router.register(source_port);
+        let rx = self.shared.router.register(source_port);
 
         let conn = match UsbDeviceConn::new(
             self,
             source_port,
             destination_port,
             rx,
-            self.writer_tx.clone(),
+            self.shared.writer_tx.clone(),
         )
         .await
         {
             Ok(c) => c,
             Err(err) => {
-                self.router.unregister(source_port);
+                self.shared.router.unregister(source_port);
                 return Err(err);
             }
         };
 
-        self.conns
-            .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
+        self.shared
+            .router
+            .attach_conn(source_port, Arc::downgrade(&Arc::clone(&conn)));
 
         Ok(conn)
     }
@@ -437,7 +439,7 @@ impl UsbDevice {
     ///
     /// make sure the connection is already opened
     pub unsafe fn connect_from(
-        self: &Arc<Self>,
+        &self,
         destination_port: u16,
         source_port: u16,
         sent_bytes: u32,
@@ -446,15 +448,15 @@ impl UsbDevice {
         device_last_received_bytes: u32,
     ) -> Arc<UsbDeviceConn> {
         debug!(
-            device_id = self.core.id,
+            device_id = self.shared.core.id,
             source_port, destination_port, "Connecting from existing state"
         );
 
-        let rx = self.router.register(source_port);
+        let rx = self.shared.router.register(source_port);
 
         let conn = unsafe {
             UsbDeviceConn::new_from(
-                self,
+                &self.shared.core,
                 destination_port,
                 source_port,
                 sent_bytes,
@@ -462,62 +464,51 @@ impl UsbDevice {
                 device_last_window_size,
                 device_last_received_bytes,
                 rx,
-                self.writer_tx.clone(),
+                self.shared.writer_tx.clone(),
             )
         };
 
-        self.conns
-            .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
+        self.shared
+            .router
+            .attach_conn(source_port, Arc::downgrade(&Arc::clone(&conn)));
 
         conn
+    }
+
+    #[inline]
+    pub fn shared(&self) -> UsbDeviceShared {
+        self.shared.clone()
+    }
+
+    #[inline]
+    pub fn udid(&self) -> &str {
+        &self.shared.udid
     }
 
     pub async fn cleanup_conn(&self, conn: &UsbDeviceConn) -> Result<(), RusbmuxError> {
         let source_port = conn.source_port;
 
-        if let Some((_, conn)) = self.conns.remove(&source_port)
-            && let Some(conn) = conn.upgrade()
+        if let Some(pe) = self.shared.router.unregister(source_port)
+            && let Some(conn) = pe.conn.and_then(|conn| conn.upgrade())
             && !conn.dropped()
         {
             conn.close().await?;
         }
 
-        self.router.unregister(source_port);
-
         Ok(())
     }
 
-    pub fn get_next_source_port(&self) -> Result<u16, RusbmuxError> {
-        for _ in 0..Self::MAX_SOURCE_PORT_PROBES {
-            let sp = self.next_source_port.fetch_add(1, Ordering::Relaxed);
-
-            let sp = if sp == 0 { 1 } else { sp };
-
-            if !self.conns.contains_key(&sp) {
-                return Ok(sp);
-            }
-        }
-
-        warn!(
-            "Source ports wrapped around without finding a free port within {} probes",
-            Self::MAX_SOURCE_PORT_PROBES
-        );
-
-        Err(RusbmuxError::RanOutOfSourcePort)
-    }
-
     pub async fn close_all(&self) -> Result<(), RusbmuxError> {
-        debug!(device_id = self.core.id, "Closing all connections");
+        debug!(device_id = self.shared.core.id, "Closing all connections");
 
         let mut first_err = None;
-        for conn in self.conns.iter().filter_map(|c| c.upgrade()) {
-            if let Err(err) = conn.send_rst().await {
+        for conn in self.shared.router.take_all_conns() {
+            if let Some(conn) = conn
+                && let Err(err) = conn.send_rst().await
+            {
                 first_err.get_or_insert(err);
             }
         }
-
-        self.router.clear();
-        self.conns.clear();
 
         match first_err {
             Some(err) => Err(err),
@@ -526,17 +517,16 @@ impl UsbDevice {
     }
 
     pub fn close_all_blocking(&self) -> Result<(), RusbmuxError> {
-        debug!(device_id = self.core.id, "Closing all connections");
+        debug!(device_id = self.shared.core.id, "Closing all connections");
 
         let mut first_err = None;
-        for conn in self.conns.iter().filter_map(|c| c.upgrade()) {
-            if let Err(err) = conn.send_rst_blocking() {
+        for conn in self.shared.router.take_all_conns() {
+            if let Some(conn) = conn
+                && let Err(err) = conn.send_rst_blocking()
+            {
                 first_err.get_or_insert(err);
             }
         }
-
-        self.router.clear();
-        self.conns.clear();
 
         match first_err {
             Some(err) => Err(err),
@@ -556,15 +546,15 @@ impl UsbDevice {
     }
 
     fn drop_loops(&self) {
-        debug!(device_id = self.core.id, "Aborting reader loop");
+        debug!(device_id = self.shared.core.id, "Aborting reader loop");
         self.reader_loop_handler.abort();
 
-        debug!(device_id = self.core.id, "Aborting writer loop");
+        debug!(device_id = self.shared.core.id, "Aborting writer loop");
         self.writer_loop_handler.abort();
     }
 
     pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
-        self.core.canceler.cancel();
+        self.shared.core.canceler.cancel();
         self.close_all().await?;
         self.set_dropped();
         // TODO: make it wait until all packets are sent
@@ -574,7 +564,7 @@ impl UsbDevice {
     }
 
     pub fn shutdown_blocking(&self) -> Result<(), RusbmuxError> {
-        self.core.canceler.cancel();
+        self.shared.core.canceler.cancel();
         self.close_all_blocking()?;
         self.set_dropped();
         self.drop_loops();
@@ -585,6 +575,11 @@ impl UsbDevice {
 
 impl Drop for UsbDevice {
     fn drop(&mut self) {
+        assert!(
+            Arc::strong_count(&self.shared.router) > 2,
+            "Usb device dropped while the packet router is shared"
+        );
+
         if !self.dropped() {
             let _ = self.shutdown_blocking();
         }
@@ -596,10 +591,10 @@ impl UsbDevice {
         let location_id = self.info.location_id();
 
         let speed = self.info.speed().unwrap_or(0);
-        let udid = &self.udid;
+        let udid = &self.shared.udid;
 
         debug!(
-            device_id = self.core.id,
+            device_id = self.shared.core.id,
             ?udid,
             speed,
             location_id,
@@ -608,12 +603,12 @@ impl UsbDevice {
         );
 
         Ok(plist_macro::plist!({
-            "DeviceID": self.core.id,
+            "DeviceID": self.shared.core.id,
             "MessageType": "Attached",
             "Properties": {
                 "ConnectionSpeed": speed,
                 "ConnectionType": "USB",
-                "DeviceID": self.core.id,
+                "DeviceID": self.shared.core.id,
                 "LocationID": location_id,
                 "ProductID": self.info.product_id(),
                 "SerialNumber": udid,

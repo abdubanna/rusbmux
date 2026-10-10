@@ -26,6 +26,7 @@ use super::CONNECTED_DEVICES;
 
 pub const SERVICE_TYPE: &str = "_apple-mobdev2._tcp.local.";
 
+// TODO: use the watch_network()
 pub async fn watch_network_daemon() {
     let Ok(mdns) = ServiceDaemon::new() else {
         error!("Failed to create mDNS daemon");
@@ -79,7 +80,7 @@ pub async fn watch_network_daemon() {
                 // detached right now for dedup purposes)
                 if !CONNECTED_DEVICES
                     .iter()
-                    .any(|dev| dev.as_usb().is_some_and(|_| dev.udid() == device.udid()))
+                    .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == device.udid()))
                 {
                     let _ = hotplug.send(DeviceEvent::Detached { id });
                 }
@@ -276,7 +277,7 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     // it would get notified only if the usb is disconnected
     let has_usb_connection = CONNECTED_DEVICES
         .iter()
-        .any(|device| device.as_usb().is_some_and(|_| device.udid() == rd.udid));
+        .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == rd.udid));
 
     if !has_usb_connection {
         let _ = super::get_hotplug_event_tx()

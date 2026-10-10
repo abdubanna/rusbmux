@@ -20,9 +20,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("no USB device connected".into());
     };
 
-    println!("[{id}] device connected: {}", device.udid);
+    println!("[{id}] device connected: {}", device.udid());
 
-    let mut provider = RusbmuxProvider::new(device, "rusbmux-example".to_string());
+    let mut provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string());
 
     provider.preflight().await?;
 

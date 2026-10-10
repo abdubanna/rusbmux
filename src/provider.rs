@@ -11,7 +11,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
     conn::{UsbDeviceConn, usb::TcpHandshake},
-    device::{packet_router::SAsyncPacketRx, usb::UsbDevice},
+    device::{
+        packet_router::SAsyncPacketRx,
+        usb::{UsbDevice, UsbDeviceShared},
+    },
     error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
 };
@@ -22,13 +25,21 @@ use crate::{
 /// through a socket
 #[derive(Debug)]
 pub struct RusbmuxProvider {
-    device: Arc<UsbDevice>,
+    device: UsbDeviceShared,
     pairing_file: Option<PairingFile>,
     label: String,
 }
 
 impl RusbmuxProvider {
-    pub fn new(device: Arc<UsbDevice>, label: String) -> Self {
+    pub fn new(device: &UsbDevice, label: String) -> Self {
+        Self {
+            device: device.shared(),
+            pairing_file: None,
+            label,
+        }
+    }
+
+    pub fn new_from(device: UsbDeviceShared, label: String) -> Self {
         Self {
             device,
             pairing_file: None,
@@ -40,16 +51,12 @@ impl RusbmuxProvider {
         self.pairing_file = Some(pairing_file);
     }
 
-    pub fn into_inner(self) -> Arc<UsbDevice> {
-        self.device
-    }
-
     /// automatically checks the pairing file and generate a new one if needed
     ///
     /// returns true if it did generate a new one, false otherwise
     pub async fn preflight(&mut self) -> Result<bool, RusbmuxError> {
         if let Some(pairing_file) =
-            crate::watcher::preflight(Arc::clone(&self.device), self.pairing_file.clone()).await?
+            crate::watcher::preflight(self.device.clone(), self.pairing_file.clone()).await?
         {
             self.set_pairing_file(pairing_file);
             return Ok(true);
@@ -82,12 +89,12 @@ impl IdeviceProvider for RusbmuxProvider {
         port: u16,
     ) -> Pin<Box<dyn Future<Output = Result<Idevice, IdeviceError>> + Send>> {
         let label = self.label.clone();
-        let device = Arc::clone(&self.device);
+        let device = self.device.clone();
 
-        let udid = self.device.info.udid().unwrap_or_default().to_string();
+        let udid = self.device.udid.clone();
 
         Box::pin(async move {
-            let source_port = device.get_next_source_port().map_err(|err| {
+            let source_port = device.router.get_next_source_port().map_err(|err| {
                 IdeviceError::UnexpectedResponse(format!(
                     "failed to connect to port {port} on {udid}: {err}"
                 ))
@@ -115,7 +122,7 @@ impl IdeviceProvider for RusbmuxProvider {
 
             let conn = unsafe {
                 UsbDeviceConn::new_from(
-                    &device,
+                    &device.core,
                     port,
                     source_port,
                     handshake.sent_bytes,
@@ -128,8 +135,8 @@ impl IdeviceProvider for RusbmuxProvider {
             };
 
             device
-                .conns
-                .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
+                .router
+                .attach_conn(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
 
             let stream = RusbmuxStream {
                 device,
@@ -157,7 +164,7 @@ impl IdeviceProvider for RusbmuxProvider {
 /// incoming USB packets are buffered until consumed by the reader, while
 /// outgoing writes are split according to the connection's current window size
 struct RusbmuxStream {
-    device: Arc<UsbDevice>,
+    device: UsbDeviceShared,
 
     // the connection will shutdown on drop
     conn: Arc<UsbDeviceConn>,

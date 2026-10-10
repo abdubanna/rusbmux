@@ -6,7 +6,7 @@ use tokio::io::AsyncReadExt;
 mod builder;
 pub use builder::{TcpFlags, UsbDevicePacketBuilder};
 
-use crate::{AsyncReading, error::ParseError};
+use crate::{AsyncReading, error::ParseError, usb_backend::MAX_PACKET_PAYLOAD_SIZE};
 
 #[derive(Debug, Clone)]
 pub struct UsbDevicePacket {
@@ -116,6 +116,12 @@ impl UsbDevicePacket {
         }
 
         let payload_len = total_length - total_header_len;
+
+        // if payload_len > MAX_PACKET_PAYLOAD_SIZE {
+        //     return Err(ParseError::InvalidData(format!(
+        //         "packet payload length {payload_len} exceeds the maximum {MAX_PACKET_PAYLOAD_SIZE}"
+        //     )));
+        // }
 
         let mut payload = BytesMut::with_capacity(payload_len);
 

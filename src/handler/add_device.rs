@@ -52,7 +52,7 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
 
     let old_ndev_id = CONNECTED_DEVICES
         .iter()
-        .find(|dev| dev.as_network().is_some_and(|n| n.udid == udid))
+        .find(|dev| dev.as_network().is_some_and(|ndev| ndev.udid == udid))
         .map(|d| d.id());
 
     let old_ndev = match old_ndev_id {
@@ -98,7 +98,7 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
     // dedup
     let has_usb = CONNECTED_DEVICES
         .iter()
-        .any(|dev| dev.as_usb().is_some_and(|_| dev.udid() == udid));
+        .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == udid));
 
     if !has_usb {
         let _ = get_hotplug_event_tx()

@@ -76,7 +76,7 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
                 .iter()
                 .find(|dev| {
                     dev.as_network()
-                        .is_some_and(|_| dev.udid() == device.udid())
+                        .is_some_and(|ndev| ndev.udid == device.udid())
                 })
                 .map(|ndev| ndev.id())
             {
@@ -96,7 +96,7 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
         ConnectionType::Network
             if CONNECTED_DEVICES
                 .iter()
-                .any(|dev| dev.as_usb().is_some_and(|_| dev.udid() == device.udid())) => {}
+                .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == device.udid())) => {}
 
         // the network device is not also connected as usb
         //

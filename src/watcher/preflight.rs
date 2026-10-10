@@ -1,4 +1,4 @@
-use std::{io::ErrorKind, path::Path, sync::Arc};
+use std::{io::ErrorKind, path::Path};
 
 use idevice::{
     IdeviceError, IdeviceService,
@@ -9,7 +9,7 @@ use idevice::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    device::usb::UsbDevice,
+    device::usb::UsbDeviceShared,
     error::RusbmuxError,
     handler::{LOCKDOWN_PATH, read_buid::read_system_buid},
     provider::RusbmuxProvider,
@@ -19,7 +19,7 @@ const INSECURE_NOTIFICATION_PROXY: &str = "com.apple.mobile.insecure_notificatio
 const REQUEST_PAIR: &str = "com.apple.mobile.lockdown.request_pair";
 const REQUEST_HOST_BUID: &str = "com.apple.mobile.lockdown.request_host_buid";
 
-pub(super) fn spawn(device: Arc<UsbDevice>) {
+pub(super) fn spawn(device: UsbDeviceShared) {
     tokio::spawn(async move {
         let canceler = device.core.canceler.clone();
         tokio::select! {
@@ -31,7 +31,7 @@ pub(super) fn spawn(device: Arc<UsbDevice>) {
     });
 }
 
-async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
+async fn run(device: UsbDeviceShared) -> Result<(), RusbmuxError> {
     let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", device.udid));
 
     let pairing_file = match tokio::fs::read(&path).await {
@@ -61,10 +61,10 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
 }
 
 pub async fn preflight(
-    device: Arc<UsbDevice>,
+    device: UsbDeviceShared,
     pairing_file: Option<PairingFile>,
 ) -> Result<Option<PairingFile>, RusbmuxError> {
-    let provider = RusbmuxProvider::new(device, "rusbmux-preflight".to_string());
+    let provider = RusbmuxProvider::new_from(device, "rusbmux-preflight".to_string());
 
     let mut lockdown = LockdownClient::connect(&provider).await?;
 

@@ -155,7 +155,7 @@ impl UsbDeviceConn {
     //  TODO: do a dump states method and let this take that
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn new_from(
-        device: &UsbDevice,
+        device_core: &DeviceCore,
         destination_port: u16,
         source_port: u16,
         sent_bytes: u32,
@@ -173,7 +173,7 @@ impl UsbDeviceConn {
             "Creating UsbDeviceConn from existing state"
         );
         Arc::new(Self {
-            device_core: device.core.clone(),
+            device_core: device_core.clone(),
             sent_bytes: AtomicU32::new(sent_bytes),
             received_bytes: AtomicU32::new(received_bytes),
             source_port,
@@ -207,7 +207,7 @@ impl UsbDeviceConn {
         );
 
         Ok(Arc::new(Self {
-            device_core: device.core.clone(),
+            device_core: device.shared.core.clone(),
             sent_bytes: AtomicU32::new(handshake.sent_bytes),
             received_bytes: AtomicU32::new(handshake.received_bytes),
             source_port,

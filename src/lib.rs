@@ -21,18 +21,20 @@
 //! # };
 //! # use futures_lite::stream::StreamExt;
 //!
-//! # #[tokio::main(flavor = "current_thread")]
+//! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut usb_hotplug = watch_usb(&rusbmux::usb_backend::DEFAULT_BACKEND);
 //!
-//! let UsbEvent::Connected((Device::Usb(device), _)) =
-//!     usb_hotplug.next().await.unwrap().unwrap()
+//! let UsbEvent::Connected {
+//!     device: Device::Usb(device),
+//!     id,
+//! } = usb_hotplug.next().await.unwrap().unwrap()
 //! else {
-//!     return Err("no device".into());
+//!     return Err("no USB device connected".into());
 //! };
 //!
 //! // rusbmux as an idevice provider — direct USB, no daemon
-//! let provider = RusbmuxProvider::new(device, "my-app".to_string());
+//! let provider = RusbmuxProvider::new(&device, "my-app".to_string());
 //!
 //! // any idevice service client can now connect over USB
 //! let mut lockdown = LockdownClient::connect(&provider).await?;

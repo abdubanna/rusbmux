@@ -3,7 +3,7 @@ pub mod network;
 pub mod packet_router;
 pub mod power_assertion;
 pub mod usb;
-use std::{borrow::Cow, net::IpAddr, sync::Arc};
+use std::{borrow::Cow, net::IpAddr};
 
 use crossfire::{MAsyncTx, mpsc};
 use network::NetworkDevice;
@@ -17,7 +17,7 @@ use crate::{
 #[derive(Debug)]
 pub enum Device {
     Network(NetworkDevice),
-    Usb(Arc<UsbDevice>),
+    Usb(UsbDevice),
 }
 
 #[derive(Debug)]
@@ -35,18 +35,26 @@ impl Device {
         }
     }
 
+    pub const fn is_usb(&self) -> bool {
+        matches!(self.connection_type(), ConnectionType::Usb)
+    }
+
+    pub const fn is_network(&self) -> bool {
+        matches!(self.connection_type(), ConnectionType::Network)
+    }
+
     #[must_use]
     pub fn id(&self) -> u64 {
         match self {
             Self::Network(dev) => dev.core.id,
-            Self::Usb(dev) => dev.core.id,
+            Self::Usb(dev) => dev.shared.core.id,
         }
     }
 
     pub fn udid(&self) -> Cow<'_, str> {
         match self {
             Self::Network(dev) => Cow::Borrowed(&dev.udid),
-            Self::Usb(dev) => Cow::Borrowed(&dev.udid),
+            Self::Usb(dev) => Cow::Borrowed(dev.udid()),
         }
     }
 
@@ -103,7 +111,7 @@ impl Device {
     }
 
     #[must_use]
-    pub const fn as_usb(&self) -> Option<&Arc<UsbDevice>> {
+    pub const fn as_usb(&self) -> Option<&UsbDevice> {
         if let Self::Usb(dev) = self {
             Some(dev)
         } else {

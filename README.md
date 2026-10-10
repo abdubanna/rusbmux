@@ -251,7 +251,7 @@ process.
 It works by exposing rusbmux's direct USB connection as an
 [`idevice`](https://github.com/jkcoxson/idevice) connection provider.
 [`RusbmuxProvider`](https://docs.rs/rusbmux/latest/rusbmux/provider/struct.RusbmuxProvider.html)
-wraps an `Arc<UsbDevice>` and implements `idevice::provider::IdeviceProvider`.
+wraps a `UsbDeviceShared` and implements `idevice::provider::IdeviceProvider`.
 
 `idevice` — the library, its service clients talks
 to a device through that one trait. Because `RusbmuxProvider` implements it,
@@ -305,7 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("[{id}] device connected: {}", device.udid);
 
-    let provider = RusbmuxProvider::new(device, "rusbmux-example".to_string());
+    let provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string());
 
     let mut lockdown = LockdownClient::connect(&provider).await?;
     let name = lockdown.get_value(Some("DeviceName"), None).await?;
