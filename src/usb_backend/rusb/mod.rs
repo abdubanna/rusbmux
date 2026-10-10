@@ -219,7 +219,7 @@ impl UsbBackend for RusbBackend {
 
         let mut stream = DeviceHotplugStream::new()?.filter_map(|event| {
             // don't include the connected event if it's not an apple devices
-            if matches!(&event, UsbEvent::Arrived(dev) if dev.device_descriptor().unwrap().vendor_id() != APPLE_VID) {
+            if matches!(&event, UsbEvent::Arrived(dev) if dev.device_descriptor().map(|dd|dd.vendor_id() != APPLE_VID).unwrap_or(true)) {
                 return None;
             }
 
