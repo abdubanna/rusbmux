@@ -12,7 +12,10 @@ use tracing::{debug, error, trace};
 pub(crate) async fn read_system_buid() -> Result<String, RusbmuxError> {
     let path = Path::new(LOCKDOWN_PATH).join("SystemConfiguration.plist");
 
-    if !path.exists() {
+    if tokio::fs::try_exists(&path)
+        .await
+        .is_ok_and(|exists| exists)
+    {
         let id = uuid::Uuid::new_v4().to_string().to_uppercase();
         let config = plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
             "SystemBUID": id
