@@ -538,9 +538,15 @@ impl UsbDevice {
 
 impl Drop for UsbDevice {
     fn drop(&mut self) {
-        assert!(
-            Arc::strong_count(&self.shared.router) > 2,
-            "Usb device dropped while the packet router is shared"
+        let router_owners = Arc::strong_count(&self.shared.router);
+
+        debug_assert!(
+            // one in the reader loop, and the other is ours, if there's more, then it's probably
+            // an RusbmuxProvider somewhere
+            router_owners <= 2,
+            "USB device dropped while packet router is still shared \
+            (strong references: {router_owners}, expected at most 2; \
+            an RusbmuxProvider may still be alive)"
         );
 
         if !self.dropped() {
