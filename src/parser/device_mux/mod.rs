@@ -6,7 +6,7 @@ use tokio::io::AsyncReadExt;
 mod builder;
 pub use builder::{TcpFlags, UsbDevicePacketBuilder};
 
-use crate::{AsyncReading, error::ParseError, usb_backend::MAX_PACKET_PAYLOAD_SIZE};
+use crate::{AsyncReading, error::ParseError};
 
 #[derive(Debug, Clone)]
 pub struct UsbDevicePacket {
