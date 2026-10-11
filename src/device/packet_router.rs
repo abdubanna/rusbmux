@@ -69,28 +69,6 @@ impl PacketRouter {
         }
     }
 
-    // TODO: put it inside of `register()` with dashmap's entry
-    pub fn get_next_source_port(&self) -> Result<u16, RusbmuxError> {
-        self.cleanup_dead();
-
-        for _ in 0..Self::MAX_SOURCE_PORT_PROBES {
-            let sp = self.next_source_port.fetch_add(1, Ordering::Relaxed);
-
-            let sp = if sp == 0 { 1 } else { sp };
-
-            if !self.routes.contains_key(&sp) {
-                return Ok(sp);
-            }
-        }
-
-        warn!(
-            "Source ports wrapped around without finding a free port within {} probes",
-            Self::MAX_SOURCE_PORT_PROBES
-        );
-
-        Err(RusbmuxError::RanOutOfSourcePort)
-    }
-
     pub fn cleanup_dead(&self) {
         self.routes.retain(|port, conn| {
             let dead = conn.tx.is_disconnected();
@@ -120,20 +98,30 @@ impl PacketRouter {
         }
     }
 
-    pub fn register(&self, port: u16) -> SAsyncPacketRx {
-        let (tx, rx) = spsc::bounded_async(256);
+    pub fn register(&self) -> Result<(SourcePort, SAsyncPacketRx), RusbmuxError> {
+        self.cleanup_dead();
 
-        self.routes.insert(
-            port,
-            PacketEntry {
-                tx: SAsyncPacketTx(tx),
-                conn: None,
-            },
+        for _ in 0..Self::MAX_SOURCE_PORT_PROBES {
+            let sp = self.next_source_port.fetch_add(1, Ordering::Relaxed);
+            let sp = if sp == 0 { 1 } else { sp };
+            if let dashmap::Entry::Vacant(v) = self.routes.entry(sp) {
+                let (tx, rx) = spsc::bounded_async(256);
+                v.insert(PacketEntry {
+                    tx: SAsyncPacketTx(tx),
+                    conn: None,
+                });
+
+                debug!(port = sp, "Connection registered");
+                return Ok((sp, SAsyncPacketRx(rx)));
+            }
+        }
+
+        warn!(
+            "Source ports wrapped around without finding a free port within {} probes",
+            Self::MAX_SOURCE_PORT_PROBES
         );
 
-        debug!(port, "Connection registered");
-
-        SAsyncPacketRx(rx)
+        Err(RusbmuxError::RanOutOfSourcePort)
     }
 
     #[inline]

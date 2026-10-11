@@ -94,7 +94,7 @@ impl IdeviceProvider for RusbmuxProvider {
         let udid = self.device.udid.clone();
 
         Box::pin(async move {
-            let source_port = device.router.get_next_source_port().map_err(|err| {
+            let (source_port, rx) = device.router.register().map_err(|err| {
                 IdeviceError::UnexpectedResponse(format!(
                     "failed to connect to port {port} on {udid}: {err}"
                 ))
@@ -107,7 +107,6 @@ impl IdeviceProvider for RusbmuxProvider {
                 "Creating new connection"
             );
 
-            let rx = device.router.register(source_port);
             let tx = device.writer_tx.clone();
 
             let handshake = TcpHandshake::perform(source_port, port, &rx, &tx)

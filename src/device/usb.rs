@@ -408,14 +408,12 @@ impl UsbDevice {
     }
 
     pub async fn connect(&self, destination_port: u16) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
-        let source_port = self.shared.router.get_next_source_port()?;
+        let (source_port, rx) = self.shared.router.register()?;
 
         debug!(
             device_id = self.shared.core.id,
             source_port, destination_port, "Creating new connection"
         );
-
-        let rx = self.shared.router.register(source_port);
 
         let conn = match UsbDeviceConn::new(
             self,
@@ -438,46 +436,6 @@ impl UsbDevice {
             .attach_conn(source_port, Arc::downgrade(&Arc::clone(&conn)));
 
         Ok(conn)
-    }
-
-    /// # Safety
-    ///
-    /// make sure the connection is already opened
-    pub unsafe fn connect_from(
-        &self,
-        destination_port: u16,
-        source_port: u16,
-        sent_bytes: u32,
-        received_bytes: u32,
-        device_last_window_size: u16,
-        device_last_received_bytes: u32,
-    ) -> Arc<UsbDeviceConn> {
-        debug!(
-            device_id = self.shared.core.id,
-            source_port, destination_port, "Connecting from existing state"
-        );
-
-        let rx = self.shared.router.register(source_port);
-
-        let conn = unsafe {
-            UsbDeviceConn::new_from(
-                &self.shared.core,
-                destination_port,
-                source_port,
-                sent_bytes,
-                received_bytes,
-                device_last_window_size,
-                device_last_received_bytes,
-                rx,
-                self.shared.writer_tx.clone(),
-            )
-        };
-
-        self.shared
-            .router
-            .attach_conn(source_port, Arc::downgrade(&Arc::clone(&conn)));
-
-        conn
     }
 
     #[inline]
