@@ -86,6 +86,7 @@ jobs:
 
       - uses: rui314/setup-mold@v1
 
+        # FIXME: shows nothing for windows
       - name: cargo clippy
         uses: giraffate/clippy-action@v1
         env:
@@ -95,6 +96,8 @@ jobs:
           tool_name: "clippy-${{ matrix.platform }}-result"
           # FIXME: the clippy pr review doesn't work
           reporter: ${{ github.event_name == 'pull_request' && 'github-pr-review' || 'github-pr-check' }}
+          filter_mode: nofilter
+          fail_on_error: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
           clippy_flags: "--all-features --locked"
 
