@@ -42,8 +42,9 @@ pub struct UsbDevice {
     pub shared: UsbDeviceShared,
     pub handler: AnyDeviceHandle,
 
-    // TODO: store only what's needed to reduce struct's size
-    pub info: AnyDeviceInfo,
+    pub speed: Option<u64>,
+    pub location_id: u32,
+    pub product_id: u16,
 
     pub version: UsbDevicePacketVersion,
 
@@ -113,7 +114,9 @@ impl UsbDevice {
                 udid,
             },
             handler: device_handle,
-            info,
+            speed: info.speed(),
+            location_id: info.location_id(),
+            product_id: info.product_id(),
             version,
             reader_loop_handler,
             writer_loop_handler,
@@ -217,7 +220,9 @@ impl UsbDevice {
                 udid,
             },
             handler: device_handle,
-            info,
+            speed: info.speed(),
+            location_id: info.location_id(),
+            product_id: info.product_id(),
             version,
             reader_loop_handler,
             writer_loop_handler,
@@ -588,9 +593,9 @@ impl Drop for UsbDevice {
 
 impl UsbDevice {
     pub fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
-        let location_id = self.info.location_id();
+        let location_id = self.location_id;
 
-        let speed = self.info.speed().unwrap_or(0);
+        let speed = self.speed.unwrap_or(0);
         let udid = &self.shared.udid;
 
         debug!(
@@ -598,7 +603,7 @@ impl UsbDevice {
             ?udid,
             speed,
             location_id,
-            product_id = self.info.product_id(),
+            product_id = self.product_id,
             "Adding device to plist"
         );
 
@@ -610,7 +615,7 @@ impl UsbDevice {
                 "ConnectionType": "USB",
                 "DeviceID": self.shared.core.id,
                 "LocationID": location_id,
-                "ProductID": self.info.product_id(),
+                "ProductID": self.product_id,
                 "SerialNumber": udid,
             }
         }))
