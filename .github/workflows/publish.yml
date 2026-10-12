@@ -32,8 +32,8 @@ jobs:
           pkgname: rusbmux-bin
           pkgbuild: ./rusbmux-bin/PKGBUILD
           updpkgsums: true
-          commit_username: abdullah-albanna
-          commit_email: abdu.albanna@proton.me
+          commit_username: abdubanna
+          commit_email: abdubanna@proton.me
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to version ${{ inputs.version }}"
           ssh_keyscan_types: rsa,ecdsa,ed25519

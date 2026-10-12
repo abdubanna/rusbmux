@@ -115,8 +115,8 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppComments=A usbmuxd replacement in pure Rust.
 AppPublisher=Abdullah Al-Banna
-AppPublisherURL=https://github.com/abdullah-albanna/rusbmux
-AppReadmeFile=https://github.com/abdullah-albanna/rusbmux/blob/main/README.md
+AppPublisherURL=https://github.com/abdubanna/rusbmux
+AppReadmeFile=https://github.com/abdubanna/rusbmux/blob/main/README.md
 
 // a placeholder so Inno Setup creates the page, the content is replaced at runtime
 LicenseFile=..\LICENSE-MIT

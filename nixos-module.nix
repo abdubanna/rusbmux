@@ -25,7 +25,7 @@ in
   config = lib.mkIf cfg.enable {
     systemd.services.rusbmux = {
       description = "rusbmux usbmuxd-compatible daemon";
-      documentation = [ "https://github.com/abdullah-albanna/rusbmux" ];
+      documentation = [ "https://github.com/abdubanna/rusbmux" ];
       after = [
         "network.target"
         "systemd-udev-trigger.service"

@@ -38,7 +38,7 @@
             strictDeps = true;
             meta = with pkgs.lib; {
               description = "A usbmuxd replacement in pure Rust";
-              homepage = "https://github.com/abdullah-albanna/rusbmux";
+              homepage = "https://github.com/abdubanna/rusbmux";
               license = with licenses; [
                 mit
                 asl20

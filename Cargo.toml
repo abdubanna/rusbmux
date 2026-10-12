@@ -5,8 +5,8 @@ edition = "2024"
 authors = ["Abdullah Al-Banna"]
 description = "A usbmuxd replacement in pure Rust"
 documentation = "https://docs.rs/rusbmux"
-repository = "https://github.com/abdullah-albanna/rusbmux"
-homepage = "https://github.com/abdullah-albanna/rusbmux"
+repository = "https://github.com/abdubanna/rusbmux"
+homepage = "https://github.com/abdubanna/rusbmux"
 license = "MIT OR Apache-2.0"
 categories = ["network-programming"]
 keywords = ["apple", "usb", "usbmuxd", "multiplexing", "ios"]
@@ -163,7 +163,7 @@ name = "rusbmux"
 depends = []
 
 [package.metadata.generate-rpm]
-vendor = "Abdullah Al-Banna <abdu.albanna@proton.me>"
+vendor = "Abdullah Al-Banna <abdubanna@proton.me>"
 
 assets = [
   { source = "target/release/rusbmux", dest = "/usr/bin/rusbmux", mode = "755" },

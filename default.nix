@@ -13,7 +13,7 @@ rustPlatform.buildRustPackage {
 
   meta = {
     description = "A usbmuxd replacement in pure Rust";
-    homepage = "https://github.com/abdullah-albanna/rusbmux";
+    homepage = "https://github.com/abdubanna/rusbmux";
     license = with lib.licenses; [
       mit
       asl20

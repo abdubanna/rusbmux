@@ -16,7 +16,7 @@
 
 ### Releases
 
-Download the latest release from the [releases](https://github.com/abdullah-albanna/rusbmux/releases/latest).
+Download the latest release from the [releases](https://github.com/abdubanna/rusbmux/releases/latest).
 
 ### Cargo
 
@@ -68,7 +68,7 @@ sudo rusbmux
 
 ### Releases
 
-Download the latest installer from the [releases](https://github.com/abdullah-albanna/rusbmux/releases/latest).
+Download the latest installer from the [releases](https://github.com/abdubanna/rusbmux/releases/latest).
 
 Run the installer and follow the setup wizard. `rusbmux` will be installed as a Windows service and start automatically.
 
@@ -127,7 +127,7 @@ Windows Registry Editor Version 5.00
 
 macOS already ships with Apple's `usbmuxd`, so installing `rusbmux` is optional.
 
-If you'd like to use `rusbmux` instead, download the latest installer from the [releases](https://github.com/abdullah-albanna/rusbmux/releases/latest).
+If you'd like to use `rusbmux` instead, download the latest installer from the [releases](https://github.com/abdubanna/rusbmux/releases/latest).
 
 ---
 
@@ -137,14 +137,14 @@ Before starting `rusbmux`, disable Apple's `usbmuxd` service:
 
 ```fish
 sudo launchctl bootout system /Library/Apple/System/Library/LaunchDaemons/com.apple.usbmuxd.plist
-sudo launchctl disable system/com.apple.usbmuxd.plist
+sudo launchctl disable system/com.apple.usbmuxd
 ```
 
 Then start `rusbmux`:
 
 ```fish
-sudo launchctl enable system/com.abdullah-albanna.rusbmux.plist
-sudo launchctl bootstrap system /Library/LaunchDaemons/com.abdullah-albanna.rusbmux.plist
+sudo launchctl enable system/com.abdubanna.rusbmux
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.abdubanna.rusbmux.plist
 ```
 
 ## Switching back to Apple's `usbmuxd`
@@ -152,14 +152,14 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.abdullah-albanna.rusb
 Disable `rusbmux`
 
 ```fish
-sudo launchctl bootout system /Library/LaunchDaemons/com.abdullah-albanna.rusbmux.plist
-sudo launchctl disable system/com.abdullah-albanna.rusbmux.plist
+sudo launchctl bootout system /Library/LaunchDaemons/com.abdubanna.rusbmux.plist
+sudo launchctl disable system/com.abdubanna.rusbmux
 ```
 
 Then re-enable Apple's service:
 
 ```fish
-sudo launchctl enable system/com.apple.usbmuxd.plist
+sudo launchctl enable system/com.apple.usbmuxd
 sudo launchctl bootstrap system /Library/Apple/System/Library/LaunchDaemons/com.apple.usbmuxd.plist
 ```
 
@@ -176,7 +176,7 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
 
   ```nix
   inputs = {
-    rusbmux.url = "github:abdullah-albanna/rusbmux"; # or to specify `github:abdullah-albanna/rusbmux/v0.2.1`
+    rusbmux.url = "github:abdubanna/rusbmux"; # or to specify `github:abdubanna/rusbmux/v0.2.1`
   };
   ```
 
@@ -197,7 +197,7 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
   ```nix
   let
     rusbmux-src = builtins.fetchGit {
-      url = "https://github.com/abdullah-albanna/rusbmux";
+      url = "https://github.com/abdubanna/rusbmux";
       ref = "main";
     };
   in {
@@ -212,7 +212,7 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
 
   ```nix
   rusbmux-src = builtins.fetchGit {
-    url = "https://github.com/abdullah-albanna/rusbmux";
+    url = "https://github.com/abdubanna/rusbmux";
     rev = "<commit-sha>";
   };
   ```
@@ -237,8 +237,8 @@ services.rusbmux = {
 
 ### Nix (Manual use)
 
-- `nix run github:abdullah-albanna/rusbmux -- --help`
-- `nix shell github:abdullah-albanna/rusbmux`
+- `nix run github:abdubanna/rusbmux -- --help`
+- `nix shell github:abdubanna/rusbmux`
 
 </details>
 
@@ -356,7 +356,7 @@ and get it and save it somewhere for later.
 
 Licensed under either of
 
-- Apache License, Version 2.0, ([LICENSE-APACHE](https://github.com/abdullah-albanna/rusbmux/blob/main/LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](https://github.com/abdullah-albanna/rusbmux/blob/main/LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+- Apache License, Version 2.0, ([LICENSE-APACHE](https://github.com/abdubanna/rusbmux/blob/main/LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](https://github.com/abdubanna/rusbmux/blob/main/LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.

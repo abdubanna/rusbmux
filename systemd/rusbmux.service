@@ -1,6 +1,6 @@
 [Unit]
 Description=rusbmux usbmuxd-compatible daemon
-Documentation=https://github.com/abdullah-albanna/rusbmux
+Documentation=https://github.com/abdubanna/rusbmux
 After=network.target systemd-udev-trigger.service
 Conflicts=usbmuxd.service
 

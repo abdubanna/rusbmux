@@ -7,7 +7,7 @@
 	<key>RunAtLoad</key>
 	<true/>
 	<key>Label</key>
-	<string>com.abdullah-albanna.rusbmux</string>
+	<string>com.abdubanna.rusbmux</string>
   <!-- <key>EnvironmentVariables</key> -->
   <!-- <dict> -->
   <!--   <key>RUST_LOG</key> -->

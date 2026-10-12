@@ -312,14 +312,14 @@ jobs:
 
           cp "target/${{ matrix.target }}/release/rusbmux" pkgroot/usr/local/bin/
 
-          cp launchctl/com.abdullah-albanna.rusbmux.plist \
+          cp launchctl/com.abdubanna.rusbmux.plist \
                 pkgroot/Library/LaunchDaemons/
 
           cp README.md LICENSE-MIT LICENSE-APACHE THIRD_PARTY_LICENSES \
             pkgroot/usr/local/share/doc/rusbmux/
 
           pkgbuild --root pkgroot \
-            --identifier com.abdullah-albanna.rusbmux \
+            --identifier com.abdubanna.rusbmux \
             --version "$VERSION" \
             --install-location / \
             "rusbmux-$VERSION-${{ matrix.arch }}.pkg"
