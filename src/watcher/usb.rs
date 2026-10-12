@@ -140,7 +140,7 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
         match event {
             Ok(UsbEvent::Connected { device, id }) => {
                 if let Some(ndev_id) = crate::utils::find_network_id_by_udid(&device.udid()) {
-                    let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
+                    let _ = hotplug_event_tx.send(DeviceEvent::Detached { id: ndev_id });
                 }
 
                 // A device may emit multiple connect events (especially during boot), and the
