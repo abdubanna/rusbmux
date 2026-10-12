@@ -1,7 +1,7 @@
 #[cfg(feature = "nusb")]
 use std::borrow::Cow;
 
-use crate::error::RusbmuxError;
+use crate::{device::Device, error::RusbmuxError, watcher::CONNECTED_DEVICES};
 
 #[cfg(feature = "nusb")]
 pub(crate) fn nusb_speed_to_number(speed: nusb::Speed) -> u64 {
@@ -77,4 +77,38 @@ pub(crate) fn is_disconnect(err: &RusbmuxError) -> bool {
     };
 
     false
+}
+
+pub(crate) fn has_usb_with_udid(udid: &str) -> bool {
+    CONNECTED_DEVICES
+        .iter()
+        .any(|d| d.as_usb().is_some_and(|u| u.shared.udid == udid))
+}
+
+pub(crate) fn has_network_with_udid(udid: &str) -> bool {
+    CONNECTED_DEVICES
+        .iter()
+        .any(|d| d.as_network().is_some_and(|u| u.udid == udid))
+}
+
+/// should this device be hidden from clients? (network shadowed by USB)
+pub(crate) fn is_shadowed(dev: &Device) -> bool {
+    match dev.as_network() {
+        Some(ndev) => has_usb_with_udid(&ndev.udid),
+        None => false,
+    }
+}
+
+pub(crate) fn find_network_id_by_udid(udid: &str) -> Option<u64> {
+    CONNECTED_DEVICES
+        .iter()
+        .find(|dev| dev.as_network().is_some_and(|ndev| ndev.udid == udid))
+        .map(|ndev| ndev.id())
+}
+
+pub(crate) fn find_network_id_by_mac_address(mac_address: &str) -> Option<u64> {
+    CONNECTED_DEVICES
+        .iter()
+        .find(|d| d.as_network().is_some_and(|u| u.mac_address == mac_address))
+        .map(|ndev| ndev.id())
 }

@@ -50,13 +50,8 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
 
     let pairing_file = PairingFile::from_bytes(&pairing_file_bytes)?;
 
-    let old_ndev_id = CONNECTED_DEVICES
-        .iter()
-        .find(|dev| dev.as_network().is_some_and(|ndev| ndev.udid == udid))
-        .map(|d| d.id());
-
-    let old_ndev = match old_ndev_id {
-        Some(id) => {
+    let old_ndev = match crate::utils::find_network_id_by_udid(&udid) {
+        Some(ndev_id) => {
             debug!(udid, "Device already exists");
             if !force {
                 return Ok(());
@@ -65,9 +60,9 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
 
             let _ = get_hotplug_event_tx()
                 .await
-                .send(DeviceEvent::Detached { id });
+                .send(DeviceEvent::Detached { id: ndev_id });
 
-            CONNECTED_DEVICES.remove(&id)
+            CONNECTED_DEVICES.remove(&ndev_id)
         }
         None => None,
     };
@@ -101,17 +96,13 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
     CONNECTED_DEVICES.insert(id, device);
 
     // dedup
-    let has_usb = CONNECTED_DEVICES
-        .iter()
-        .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == udid));
-
-    if !has_usb {
+    if !crate::utils::has_usb_with_udid(&udid) {
         let _ = get_hotplug_event_tx()
             .await
             .send(DeviceEvent::Attached { id });
         info!(id, %udid, %ip, "Manually added network device");
     } else {
-        debug!(id, %udid, "Network device tracked but not broadcast (USB preferred)");
+        info!(id, %udid, "Network device tracked but not broadcast (USB preferred)");
     }
 
     Ok(())

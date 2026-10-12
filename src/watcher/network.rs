@@ -55,34 +55,22 @@ pub async fn watch_network_daemon() {
 
                 debug!(mac_address, "Removing network device");
 
-                let hotplug = get_hotplug_event_tx().await;
-
-                let Some(id) = CONNECTED_DEVICES
-                    .iter()
-                    .find(|dev| {
-                        dev.as_network()
-                            .is_some_and(|ndev| ndev.mac_address == mac_address)
-                    })
-                    .map(|dev| dev.id())
-                else {
+                let Some(id) = crate::utils::find_network_id_by_mac_address(mac_address) else {
+                    debug!(mac_address, "Network device is not connected, skipping");
                     continue;
                 };
 
                 let Some((_, device)) = CONNECTED_DEVICES.remove(&id) else {
-                    warn!(id, "Device was already removed from CONNECTED_DEVICES");
+                    warn!(id, "Device was already removed from CONNECTED_DEVICES ?");
                     continue;
                 };
                 let _ = device.shutdown().await;
 
-                // only send the detached event if:
-                //  1. it's the network device that we're trying to remove
-                //  2. that device is not connected as usb (because the network device would be
-                // detached right now for dedup purposes)
-                if !CONNECTED_DEVICES
-                    .iter()
-                    .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == device.udid()))
-                {
-                    let _ = hotplug.send(DeviceEvent::Detached { id });
+                // dedup
+                if !crate::utils::has_usb_with_udid(&device.udid()) {
+                    let _ = get_hotplug_event_tx()
+                        .await
+                        .send(DeviceEvent::Detached { id });
                 }
             }
             _ => {}
@@ -242,10 +230,7 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     // would get the device connect twice
     //
     // TODO: check on the resolved service it self
-    if CONNECTED_DEVICES
-        .iter()
-        .any(|dev| dev.as_network().is_some_and(|ndev| ndev.udid == rd.udid))
-    {
+    if crate::utils::has_network_with_udid(&rd.udid) {
         debug!(udid = rd.udid, "Device already added, skipping");
         return;
     }
@@ -275,11 +260,7 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     // skip hotplug notifications when the device is already connected via usb
     //
     // it would get notified only if the usb is disconnected
-    let has_usb_connection = CONNECTED_DEVICES
-        .iter()
-        .any(|dev| dev.as_usb().is_some_and(|dev| dev.udid() == rd.udid));
-
-    if !has_usb_connection {
+    if !crate::utils::has_usb_with_udid(&rd.udid) {
         let _ = super::get_hotplug_event_tx()
             .await
             .send(super::DeviceEvent::Attached { id });
