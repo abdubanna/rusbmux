@@ -116,7 +116,7 @@ pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
         // socket, so this stops it
         #[cfg(target_os = "macos")]
         {
-            debug!("Setting the `Nosigpipe` socket option");
+            tracing::debug!("Setting the `Nosigpipe` socket option");
             if let Err(err) = rustix::net::sockopt::set_socket_nosigpipe(&listener, true) {
                 warn!(%err, "Failed to set Nosigpipe socket option");
             }
