@@ -84,19 +84,25 @@ impl UsbDevice {
         debug!(device_id = id, "Sent version packet");
 
         // devices sometimes send packets from other unclosed connections
-        //
-        // TODO: add timeout
-        let version = loop {
-            let version_response = UsbDevicePacket::from_reader(&mut end_in).await?;
+        let version = tokio::time::timeout(tokio::time::Duration::from_secs(3), async {
+            loop {
+                let version_response = UsbDevicePacket::from_reader(&mut end_in).await?;
 
-            match version_response.payload {
-                UsbDevicePacketPayload::Version(v) => break v,
-                _ => {
-                    warn!("Received a non version packet, dropping");
-                    continue;
+                match version_response.payload {
+                    UsbDevicePacketPayload::Version(v) => break Result::<_, RusbmuxError>::Ok(v),
+                    _ => {
+                        warn!("Received a non version packet, dropping");
+                        continue;
+                    }
                 }
             }
-        };
+        })
+        .await
+        .map_err(|_| {
+            RusbmuxError::UnexpectedPacket(
+                "Expected to receive a version packet within 3s".to_string(),
+            )
+        })??;
 
         debug!(device_id = id, ?version, "Received version response");
 
