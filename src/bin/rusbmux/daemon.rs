@@ -1,4 +1,5 @@
-use crate::error::RusbmuxError;
+use crate::handler::LOCKDOWN_PATH;
+use rusbmux::error::RusbmuxError;
 use tracing::{debug, error, info, warn};
 
 #[cfg(unix)]
@@ -10,6 +11,11 @@ pub const LISTENER_PATH: &str = "/var/run/usbmuxd";
 pub type Listener = tokio::net::TcpListener;
 #[cfg(windows)]
 pub const LISTENER_PATH: &str = "127.0.0.1:27015";
+
+#[cfg(unix)]
+pub type ConnectionStream = tokio::net::UnixStream;
+#[cfg(windows)]
+pub type ConnectionStream = tokio::net::TcpStream;
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
@@ -68,11 +74,17 @@ async fn get_listener(socket_path: &str) -> Result<Listener, RusbmuxError> {
     }
 }
 
+async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
+    // TODO: create the folder with 701 permissions
+    tokio::fs::create_dir_all(LOCKDOWN_PATH)
+        .await
+        .inspect_err(|err| error!(LOCKDOWN_PATH, %err, "Failed to create the lockdown folder"))?;
+
+    Ok(())
+}
+
 pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
-    use crate::{
-        handler::create_lockdown_dir,
-        watcher::{watch_network_daemon, watch_usb_daemon},
-    };
+    use crate::watcher::{watch_network_daemon, watch_usb_daemon};
 
     let socket = socket.unwrap_or(LISTENER_PATH.to_string());
 
@@ -121,7 +133,7 @@ pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
     }
 
     info!("Spawning the device watcher");
-    tokio::spawn(watch_usb_daemon(crate::usb_backend::DEFAULT_BACKEND));
+    tokio::spawn(watch_usb_daemon());
 
     info!("Spawning the network watcher");
     tokio::spawn(watch_network_daemon());
@@ -218,14 +230,12 @@ pub async fn cleanup() {
 }
 
 pub async fn start_accepting(listener: Listener) {
-    use crate::handler;
-
     loop {
         match listener.accept().await {
             Ok((socket, _)) => {
                 info!("New connection");
                 tokio::spawn(async move {
-                    handler::handle_client(Box::new(socket)).await;
+                    crate::handler::handle_client(socket).await;
                 });
             }
             Err(err) => {

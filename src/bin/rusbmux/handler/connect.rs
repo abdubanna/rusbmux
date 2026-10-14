@@ -1,22 +1,33 @@
 use std::sync::Arc;
 
-use crate::{
-    AsyncReading, AsyncWriting, ReadWrite,
+use rusbmux::{
     conn::{DeviceConn, NetworkDeviceConn, UsbDeviceConn},
     error::RusbmuxError,
-    handler::send_result,
-    parser::usbmux::UsbMuxResult,
-    watcher::CONNECTED_DEVICES,
+    usbmux::UsbMuxResult,
 };
+
+use crate::{daemon::ConnectionStream, watcher::CONNECTED_DEVICES};
+
+use super::send_result;
 
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info, trace};
 
+#[cfg(unix)]
+pub type ReadHalf<'a> = tokio::net::unix::ReadHalf<'a>;
+#[cfg(windows)]
+pub type ReadHalf<'a> = tokio::net::tcp::ReadHalf<'a>;
+
+#[cfg(unix)]
+pub type WriteHalf<'a> = tokio::net::unix::WriteHalf<'a>;
+#[cfg(windows)]
+pub type WriteHalf<'a> = tokio::net::tcp::WriteHalf<'a>;
+
 const CLIENT_BUFF_SIZE: usize = 128 * 1024;
 
 pub async fn handle_connect(
-    mut client: Box<dyn ReadWrite>,
+    client: &mut ConnectionStream,
     device_id: u64,
     destination_port: u16,
     tag: u32,
@@ -26,18 +37,18 @@ pub async fn handle_connect(
         Err(err) => {
             match &err {
                 RusbmuxError::DeviceNotFound(_) | RusbmuxError::RanOutOfSourcePort => {
-                    send_result(&mut client, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
+                    send_result(client, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
                 }
 
                 _ => {
-                    send_result(&mut client, UsbMuxResult::ConnectionRefused, tag).await?;
+                    send_result(client, UsbMuxResult::ConnectionRefused, tag).await?;
                 }
             }
             return Err(err);
         }
     };
 
-    send_result(&mut client, UsbMuxResult::OK, tag).await?;
+    send_result(client, UsbMuxResult::OK, tag).await?;
 
     match conn {
         DeviceConn::Usb(conn) => handle_usb_device_connect(client, conn).await?,
@@ -48,18 +59,18 @@ pub async fn handle_connect(
 }
 
 pub async fn handle_network_device_connect(
-    mut client: Box<dyn ReadWrite>,
+    client: &mut ConnectionStream,
     mut conn: NetworkDeviceConn,
 ) -> Result<(), RusbmuxError> {
-    let device_id = conn.device_id;
-    let destination_port = conn.destination_port;
+    let device_id = conn.device_id();
+    let destination_port = conn.destination_port();
 
-    let canceler = conn.device_canceler.clone();
+    let canceler = conn.device_canceler();
 
     tokio::select! {
         res = tokio::io::copy_bidirectional_with_sizes(
             &mut conn.stream,
-            &mut client,
+            client,
             CLIENT_BUFF_SIZE,
             CLIENT_BUFF_SIZE
         ) => {
@@ -75,14 +86,14 @@ pub async fn handle_network_device_connect(
 }
 
 pub async fn handle_usb_device_connect(
-    client: Box<dyn ReadWrite>,
+    client: &mut ConnectionStream,
     conn: Arc<UsbDeviceConn>,
 ) -> Result<(), RusbmuxError> {
-    let device_id = conn.device_core.id;
-    let destination_port = conn.destination_port;
+    let device_id = conn.device_id();
+    let destination_port = conn.destination_port();
 
     let mut read_buf = BytesMut::with_capacity(CLIENT_BUFF_SIZE);
-    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    let (mut client_reader, mut client_writer) = client.split();
 
     loop {
         tokio::select! {
@@ -118,7 +129,7 @@ pub async fn handle_usb_device_connect(
 }
 
 pub async fn client_read(
-    client: &mut dyn AsyncReading,
+    client: &mut ReadHalf<'_>,
     buf: &mut BytesMut,
     sendable_bytes: usize,
 ) -> Result<BytesMut, RusbmuxError> {
@@ -139,10 +150,7 @@ pub async fn client_read(
     Ok(buf.split_to(sendable_bytes.min(buf.len())))
 }
 
-pub async fn client_send(
-    client: &mut dyn AsyncWriting,
-    payload: Bytes,
-) -> Result<(), RusbmuxError> {
+pub async fn client_send(client: &mut WriteHalf<'_>, payload: Bytes) -> Result<(), RusbmuxError> {
     trace!(len = payload.len(), "Sending packet to client");
 
     client.write_all(&payload).await.inspect_err(|err| {

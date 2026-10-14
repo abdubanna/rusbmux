@@ -1,4 +1,4 @@
-use futures_lite::stream::StreamExt;
+use futures::stream::StreamExt;
 use idevice::{IdeviceService, services::lockdown::LockdownClient};
 use rusbmux::{
     device::Device,
@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("[{id}] device connected: {}", device.udid());
 
-    let provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string());
+    let provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string(), None);
 
     let mut lockdown = LockdownClient::connect(&provider).await?;
     let name = lockdown.get_value(Some("DeviceName"), None).await?;

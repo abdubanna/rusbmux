@@ -1,4 +1,4 @@
-use futures_lite::stream::StreamExt;
+use futures::stream::StreamExt;
 use idevice::{IdeviceService, services::syslog_relay::SyslogRelayClient};
 use rusbmux::{
     device::Device,
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("[{id}] device connected: {}", device.udid());
 
-    let mut provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string());
+    let mut provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string(), None);
 
     provider.preflight().await?;
 

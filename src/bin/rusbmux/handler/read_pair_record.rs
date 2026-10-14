@@ -1,23 +1,24 @@
 use std::{io::ErrorKind, path::Path};
 
-use crate::{
-    AsyncWriting,
+use crate::daemon::ConnectionStream;
+
+use super::{LOCKDOWN_PATH, send_result};
+use rusbmux::{
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, send_result},
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
+    usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace};
 
 pub async fn handle_read_pair_record(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     pair_record_id: String,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    if let Err(err) = read_pair_record(writer, pair_record_id, tag).await {
+    if let Err(err) = read_pair_record(client, pair_record_id, tag).await {
         match err {
             RusbmuxError::UnexpectedPacket(_) => {
-                send_result(writer, UsbMuxResult::BadCommand, tag).await?;
+                send_result(client, UsbMuxResult::BadCommand, tag).await?;
             }
             RusbmuxError::IO(ref io_err)
                 if matches!(
@@ -25,7 +26,7 @@ pub async fn handle_read_pair_record(
                     ErrorKind::PermissionDenied | ErrorKind::NotFound
                 ) =>
             {
-                send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
+                send_result(client, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
             }
             _ => {}
         }
@@ -37,7 +38,7 @@ pub async fn handle_read_pair_record(
 }
 
 pub async fn read_pair_record(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     pair_record_id: String,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
@@ -79,7 +80,7 @@ pub async fn read_pair_record(
 
     trace!(tag, "Sending pair record response");
 
-    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+    client.write_all(&usbmux_packet).await.inspect_err(|err| {
         if !crate::utils::is_disconnect_io(err) {
             error!(
                 tag,

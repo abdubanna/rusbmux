@@ -3,27 +3,22 @@ use std::{io::ErrorKind, ops::ControlFlow};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{
-    AsyncWriting, ReadWrite,
+use rusbmux::{
     error::{MissingFields, ParseError, RusbmuxError},
-    handler::{
-        add_device::handle_add_device, connect::handle_connect,
-        delete_pair_record::handle_delete_pair_record, device_list::handle_device_list,
-        listen::handle_listen, listeners_list::handle_listeners_list, read_buid::handle_read_buid,
-        read_pair_record::handle_read_pair_record, save_pair_record::handle_save_pair_record,
-    },
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxResult, UsbMuxVersion},
+    usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxResult, UsbMuxVersion},
 };
 
-pub mod add_device;
-pub mod connect;
-pub mod delete_pair_record;
-pub mod device_list;
-pub mod listen;
-pub mod listeners_list;
-pub mod read_buid;
-pub mod read_pair_record;
-pub mod save_pair_record;
+use crate::daemon::ConnectionStream;
+
+mod add_device;
+mod connect;
+mod delete_pair_record;
+mod device_list;
+mod listen;
+mod listeners_list;
+mod read_buid;
+mod read_pair_record;
+mod save_pair_record;
 
 #[cfg(target_os = "macos")]
 pub const LOCKDOWN_PATH: &str = "/var/db/lockdown";
@@ -34,7 +29,7 @@ pub const LOCKDOWN_PATH: &str = "/var/lib/lockdown";
 #[cfg(windows)]
 pub const LOCKDOWN_PATH: &str = "C:\\ProgramData\\Apple\\Lockdown";
 
-pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
+pub async fn handle_client(mut client: ConnectionStream) {
     loop {
         let usbmux_packet = match UsbMuxPacket::from_reader(&mut client).await {
             Ok(p) => p,
@@ -112,8 +107,8 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
     }
 }
 
-pub async fn handle_message(
-    client: &mut Box<dyn ReadWrite>,
+async fn handle_message(
+    client: &mut ConnectionStream,
     usbmux_packet: UsbMuxPacket,
 ) -> Result<ControlFlow<()>, HandlerError> {
     let tag = usbmux_packet.header.tag;
@@ -166,14 +161,14 @@ pub async fn handle_message(
 
             match usbmux_request {
                 UsbMuxRequest::ListDevices { .. } => {
-                    handle_device_list(client, usbmux_packet.header.tag)
+                    device_list::handle_device_list(client, usbmux_packet.header.tag)
                         .await
                         .map_err(|err| (err, "ListDevices"))?;
                 }
 
                 UsbMuxRequest::Listen { .. } => {
                     info!(tag, "Client entered listen mode");
-                    handle_listen(client, usbmux_packet.header.tag)
+                    listen::handle_listen(client, usbmux_packet.header.tag)
                         .await
                         .map_err(|err| (err, "Listen", true))?;
 
@@ -181,23 +176,25 @@ pub async fn handle_message(
                     return Ok(ControlFlow::Break(()));
                 }
                 UsbMuxRequest::ListListeners { .. } => {
-                    handle_listeners_list(client, usbmux_packet.header.tag)
+                    listeners_list::handle_listeners_list(client, usbmux_packet.header.tag)
                         .await
                         .map_err(|err| (err, "ListListeners"))?;
                 }
                 UsbMuxRequest::ReadPairRecord { pair_record_id, .. } => {
-                    handle_read_pair_record(client, pair_record_id, usbmux_packet.header.tag)
-                        .await
-                        .map_err(|err| (err, "ReadPairRecord"))?;
+                    read_pair_record::handle_read_pair_record(
+                        client,
+                        pair_record_id,
+                        usbmux_packet.header.tag,
+                    )
+                    .await
+                    .map_err(|err| (err, "ReadPairRecord"))?;
                 }
                 UsbMuxRequest::Connect {
                     device_id, port, ..
                 } => {
                     info!(tag, "Client entered connect mode");
 
-                    // HACK:
-                    let client = std::mem::replace(client, Box::new(std::io::Cursor::new(vec![])));
-                    handle_connect(client, device_id, port, usbmux_packet.header.tag)
+                    connect::handle_connect(client, device_id, port, usbmux_packet.header.tag)
                         .await
                         .map_err(|err| (err, "Connect", true))?;
 
@@ -205,7 +202,7 @@ pub async fn handle_message(
                     return Ok(ControlFlow::Break(()));
                 }
                 UsbMuxRequest::ReadBUID { .. } => {
-                    handle_read_buid(client, &usbmux_packet)
+                    read_buid::handle_read_buid(client, &usbmux_packet)
                         .await
                         .map_err(|err| (err, "ReadBUID"))?;
                 }
@@ -215,7 +212,7 @@ pub async fn handle_message(
                     device_id,
                     ..
                 } => {
-                    handle_save_pair_record(
+                    save_pair_record::handle_save_pair_record(
                         client,
                         pair_record_id,
                         pair_record_data,
@@ -226,14 +223,14 @@ pub async fn handle_message(
                     .map_err(|err| (err, "SavePairRecord"))?;
                 }
                 UsbMuxRequest::DeletePairRecord { pair_record_id, .. } => {
-                    handle_delete_pair_record(client, pair_record_id, tag)
+                    delete_pair_record::handle_delete_pair_record(client, pair_record_id, tag)
                         .await
                         .map_err(|err| (err, "DeletePairRecord"))?;
                 }
                 UsbMuxRequest::AddDevice {
                     ip, udid, force, ..
                 } => {
-                    handle_add_device(client, ip, udid, force, tag)
+                    add_device::handle_add_device(client, ip, udid, force, tag)
                         .await
                         .map_err(|err| (err, "AddDevice"))?;
                 }
@@ -247,7 +244,7 @@ pub async fn handle_message(
 }
 
 pub async fn send_result(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     code: UsbMuxResult,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
@@ -264,7 +261,7 @@ pub async fn send_result(
         UsbMuxMsgType::MessagePlist,
         tag,
     );
-    writer
+    client
         .write_all(&result_usbmux_packet)
         .await
         .inspect_err(|err| {
@@ -274,15 +271,6 @@ pub async fn send_result(
         })?;
 
     trace!(tag, "Sent OKAY response");
-
-    Ok(())
-}
-
-pub async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
-    // TODO: create the folder with 701 permissions
-    tokio::fs::create_dir_all(LOCKDOWN_PATH)
-        .await
-        .inspect_err(|err| error!(LOCKDOWN_PATH, %err, "Failed to create the lockdown folder"))?;
 
     Ok(())
 }
@@ -301,7 +289,7 @@ fn check_pair_record_id(pair_record_id: &str) -> Result<(), RusbmuxError> {
     Ok(())
 }
 
-pub struct HandlerError {
+struct HandlerError {
     err: RusbmuxError,
     request: Option<&'static str>,
     fatal: bool,

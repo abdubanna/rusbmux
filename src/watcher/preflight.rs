@@ -1,70 +1,27 @@
-use std::{io::ErrorKind, path::Path};
-
 use idevice::{
     IdeviceError, IdeviceService,
     pairing_file::PairingFile,
     provider::IdeviceProvider,
     services::{lockdown::LockdownClient, notification_proxy::NotificationProxyClient},
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
-use crate::{
-    device::usb::UsbDeviceShared,
-    error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, read_buid::read_system_buid},
-    provider::RusbmuxProvider,
-};
+use crate::{device::usb::UsbDeviceShared, error::RusbmuxError, provider::RusbmuxProvider};
 
 const INSECURE_NOTIFICATION_PROXY: &str = "com.apple.mobile.insecure_notification_proxy";
 const REQUEST_PAIR: &str = "com.apple.mobile.lockdown.request_pair";
 const REQUEST_HOST_BUID: &str = "com.apple.mobile.lockdown.request_host_buid";
 
-pub(super) fn spawn(device: UsbDeviceShared) {
-    tokio::spawn(async move {
-        let canceler = device.core.canceler.clone();
-        tokio::select! {
-            Err(err) = run(device) => {
-                error!(%err, "Device preflight failed");
-            },
-            _ = canceler.cancelled() => {}
-        }
-    });
-}
-
-async fn run(device: UsbDeviceShared) -> Result<(), RusbmuxError> {
-    let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", device.udid));
-
-    let pairing_file = match tokio::fs::read(&path).await {
-        Ok(data) => {
-            let pairing_file = PairingFile::from_bytes(&data);
-
-            match pairing_file {
-                Ok(p) => Some(p),
-                Err(err) => {
-                    debug!(%err, "Failed to parse pairing file");
-                    tokio::fs::remove_file(&path).await?;
-                    None
-                }
-            }
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => None,
-        Err(err) => return Err(err.into()),
-    };
-
-    let pairing_file = preflight(device, pairing_file).await?;
-
-    if let Some(pf) = pairing_file {
-        tokio::fs::write(path, pf.serialize()?).await?;
-    }
-
-    Ok(())
-}
-
 pub async fn preflight(
     device: UsbDeviceShared,
     pairing_file: Option<PairingFile>,
+    system_buid: &str,
 ) -> Result<Option<PairingFile>, RusbmuxError> {
-    let provider = RusbmuxProvider::new_from(device, "rusbmux-preflight".to_string());
+    let provider = RusbmuxProvider::new_from(
+        device,
+        "rusbmux-preflight".to_string(),
+        Some(system_buid.to_string()),
+    );
 
     let mut lockdown = LockdownClient::connect(&provider).await?;
 
@@ -93,11 +50,10 @@ pub async fn preflight(
         }
     }
 
-    let system_buid = read_system_buid().await?;
     let host_id = uuid::Uuid::new_v4().to_string().to_uppercase();
 
     lockdown
-        .set_value("UntrustedHostBUID", system_buid.as_str().into(), None)
+        .set_value("UntrustedHostBUID", system_buid.into(), None)
         .await?;
 
     let product_version = lockdown
@@ -126,7 +82,7 @@ pub async fn preflight(
         || (device_class == "AppleTV" && product_version_major >= 9);
 
     // TODO: test on an old device
-    let pairing_file = match lockdown.pair_once(&host_id, &system_buid, None).await {
+    let pairing_file = match lockdown.pair_once(&host_id, system_buid, None).await {
         Ok(pairing_file) => pairing_file,
         Err(
             err @ (IdeviceError::PasswordProtected | IdeviceError::PairingDialogResponsePending),
@@ -134,7 +90,7 @@ pub async fn preflight(
             if support_notifications {
                 let mut notifications = connect_notifications(&provider, &mut lockdown).await?;
 
-                wait_for_pair_request(&mut lockdown, &mut notifications, &system_buid, &host_id)
+                wait_for_pair_request(&mut lockdown, &mut notifications, system_buid, &host_id)
                     .await?;
                 lockdown.pair_once(host_id, system_buid, None).await?
             } else {

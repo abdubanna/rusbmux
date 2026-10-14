@@ -3,18 +3,19 @@ use std::{net::IpAddr, path::Path};
 use idevice::pairing_file::PairingFile;
 use tracing::{debug, info, warn};
 
+use rusbmux::{
+    device::Device, error::RusbmuxError, usb_backend::next_device_id, usbmux::UsbMuxResult,
+};
+
 use crate::{
-    AsyncWriting,
-    device::Device,
-    error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, send_result},
-    parser::usbmux::UsbMuxResult,
-    usb_backend::next_device_id,
+    daemon::ConnectionStream,
     watcher::{CONNECTED_DEVICES, DeviceEvent, get_hotplug_event_tx},
 };
 
+use super::{LOCKDOWN_PATH, send_result};
+
 pub async fn handle_add_device(
-    client: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     ip: IpAddr,
     udid: String,
     force: bool,
@@ -77,6 +78,7 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
         pairing_file.wifi_mac_address,
         "manual".to_string(),
         udid_clone,
+        Path::new(LOCKDOWN_PATH),
     )
     .await
     {

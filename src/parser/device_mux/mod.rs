@@ -6,7 +6,7 @@ use tokio::io::AsyncReadExt;
 mod builder;
 pub use builder::{TcpFlags, UsbDevicePacketBuilder};
 
-use crate::{AsyncReading, error::ParseError};
+use crate::{error::ParseError, usb_backend::AnyEndpointReader};
 
 #[derive(Debug, Clone)]
 pub struct UsbDevicePacket {
@@ -16,7 +16,7 @@ pub struct UsbDevicePacket {
 }
 
 impl UsbDevicePacket {
-    pub const HEADERS_LEN_V2: usize = UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN;
+    pub(crate) const HEADERS_LEN_V2: usize = UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN;
 
     #[inline]
     #[must_use]
@@ -89,7 +89,7 @@ impl UsbDevicePacket {
         })
     }
 
-    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
+    pub async fn from_reader(reader: &mut AnyEndpointReader) -> Result<Self, ParseError> {
         let header = UsbDevicePacketHeader::from_reader(reader).await?;
         let protocol = header.get_protocol();
 
@@ -414,7 +414,7 @@ impl UsbDevicePacketHeader {
         }
     }
 
-    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
+    pub async fn from_reader(reader: &mut AnyEndpointReader) -> Result<Self, ParseError> {
         // v2 and v1 share the same first bytes
         let mut header_buff = [0u8; UsbDevicePacketHeaderV2::SIZE];
 

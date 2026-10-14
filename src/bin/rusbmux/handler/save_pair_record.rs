@@ -3,29 +3,30 @@ use std::{io::ErrorKind, path::Path};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace};
 
-use crate::{
-    AsyncWriting,
+use crate::daemon::ConnectionStream;
+
+use super::{LOCKDOWN_PATH, send_result};
+use rusbmux::{
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, send_result},
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
+    usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 
 pub async fn handle_save_pair_record(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     pair_record_id: String,
     pair_record_data: plist::Data,
     device_id: Option<u64>,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    match save_pair_record(writer, pair_record_id, pair_record_data, device_id, tag).await {
+    match save_pair_record(client, pair_record_id, pair_record_data, device_id, tag).await {
         Ok(()) => {
-            send_result(writer, UsbMuxResult::OK, tag).await?;
+            send_result(client, UsbMuxResult::OK, tag).await?;
         }
 
         Err(err) => {
             match err {
                 RusbmuxError::UnexpectedPacket(_) => {
-                    send_result(writer, UsbMuxResult::BadCommand, tag).await?;
+                    send_result(client, UsbMuxResult::BadCommand, tag).await?;
                 }
 
                 RusbmuxError::IO(ref io_err)
@@ -34,7 +35,7 @@ pub async fn handle_save_pair_record(
                         ErrorKind::PermissionDenied | ErrorKind::NotFound
                     ) =>
                 {
-                    send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
+                    send_result(client, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
                 }
 
                 _ => {}
@@ -48,7 +49,7 @@ pub async fn handle_save_pair_record(
 }
 
 pub async fn save_pair_record(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     pair_record_id: String,
     pair_record_data: plist::Data,
     device_id: Option<u64>,
@@ -98,7 +99,7 @@ pub async fn save_pair_record(
             tag,
         );
 
-        writer.write_all(&pair_response).await.inspect_err(|err| {
+        client.write_all(&pair_response).await.inspect_err(|err| {
             if !crate::utils::is_disconnect_io(err) {
                 error!(
                     tag,

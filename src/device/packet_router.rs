@@ -13,7 +13,7 @@ use tracing::{debug, trace, warn};
 use crate::{conn::UsbDeviceConn, error::RusbmuxError, parser::device_mux::UsbDevicePacket};
 
 #[derive(Debug)]
-pub struct SAsyncPacketTx(pub AsyncTx<spsc::Array<UsbDevicePacket>>);
+pub struct SAsyncPacketTx(AsyncTx<spsc::Array<UsbDevicePacket>>);
 
 #[derive(Debug)]
 pub struct SAsyncPacketRx(pub AsyncRx<spsc::Array<UsbDevicePacket>>);
@@ -41,15 +41,15 @@ type SourcePort = u16;
 
 #[derive(Debug)]
 pub struct PacketEntry {
-    pub tx: SAsyncPacketTx,
+    tx: SAsyncPacketTx,
     /// bookkeeping for `close_all`; weak, so it never keeps a conn alive
     pub conn: Option<Weak<UsbDeviceConn>>,
 }
 
 #[derive(Debug)]
 pub struct PacketRouter {
-    pub routes: DashMap<SourcePort, PacketEntry>,
-    pub next_source_port: AtomicU16,
+    routes: DashMap<SourcePort, PacketEntry>,
+    next_source_port: AtomicU16,
 }
 
 impl Default for PacketRouter {
@@ -69,7 +69,7 @@ impl PacketRouter {
         }
     }
 
-    pub fn cleanup_dead(&self) {
+    fn cleanup_dead(&self) {
         self.routes.retain(|port, conn| {
             let dead = conn.tx.is_disconnected();
             if dead {

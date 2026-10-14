@@ -1,9 +1,9 @@
 use serde::{Deserialize, Deserializer};
 use std::net::IpAddr;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
-use crate::{AsyncReading, error::ParseError};
+use crate::error::ParseError;
 
 #[derive(Debug, Clone)]
 pub struct UsbMuxPacket {
@@ -43,7 +43,7 @@ impl UsbMuxPacket {
         .encode()
     }
 
-    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
+    pub async fn from_reader(reader: &mut (impl AsyncRead + Unpin)) -> Result<Self, ParseError> {
         let header = UsbMuxHeader::from_reader(reader).await?;
 
         let payload_len = header
@@ -151,7 +151,7 @@ impl UsbMuxHeader {
         bytemuck::cast(raw)
     }
 
-    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
+    pub async fn from_reader(reader: &mut (impl AsyncRead + Unpin)) -> Result<Self, ParseError> {
         let mut buf = [0; Self::SIZE];
         reader.read_exact(&mut buf).await?;
 

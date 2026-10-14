@@ -13,11 +13,11 @@ use crate::error::RusbmuxError;
 pub struct NetworkDeviceConn {
     pub stream: TcpStream,
 
-    pub device_id: u64,
+    device_id: u64,
 
-    pub destination_port: u16,
+    destination_port: u16,
 
-    pub device_canceler: CancellationToken,
+    device_canceler: CancellationToken,
 }
 
 impl NetworkDeviceConn {
@@ -63,5 +63,17 @@ impl NetworkDeviceConn {
 
     pub async fn wait_shutdown(&self) {
         self.device_canceler.cancelled().await;
+    }
+
+    pub fn device_id(&self) -> u64 {
+        self.device_id
+    }
+
+    pub fn destination_port(&self) -> u16 {
+        self.destination_port
+    }
+
+    pub fn device_canceler(&self) -> CancellationToken {
+        self.device_canceler.clone()
     }
 }

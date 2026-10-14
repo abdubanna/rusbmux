@@ -7,31 +7,30 @@ use idevice::{
     IdeviceService, heartbeat::HeartbeatClient, pairing_file::PairingFile, provider::TcpProvider,
 };
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::{
     conn::NetworkDeviceConn,
     device::{core::DeviceCore, power_assertion::PowerAssertion},
     error::RusbmuxError,
-    handler::LOCKDOWN_PATH,
-    watcher::remove_device,
 };
 
 #[derive(Debug)]
 pub struct NetworkDevice {
-    pub core: DeviceCore,
+    core: DeviceCore,
 
-    pub addr: IpAddr,
+    addr: IpAddr,
 
     /// In which interface this device got discovered (only useful for IPv6)
-    pub scope_id: Option<u32>,
+    scope_id: Option<u32>,
 
     pub mac_address: String,
-    pub service_name: String,
+    service_name: String,
 
     pub udid: String,
 
-    pub hb_handler: JoinHandle<()>,
+    hb_handler: JoinHandle<()>,
     _power_assertion: PowerAssertion,
 }
 
@@ -51,10 +50,11 @@ impl NetworkDevice {
         mac_address: String,
         service_name: String,
         udid: String,
+        lockdown_path: &Path,
     ) -> Result<Self, RusbmuxError> {
         let (mut heartbeat_client, addr) =
-            Self::connect_heartbeat_client(addr, scope_id, udid.clone()).await?;
-        let power_assertion = PowerAssertion::new(addr, scope_id, &udid).await?;
+            Self::connect_heartbeat_client(addr, scope_id, udid.clone(), lockdown_path).await?;
+        let power_assertion = PowerAssertion::new(addr, scope_id, &udid, lockdown_path).await?;
 
         let core = DeviceCore::new(id);
 
@@ -62,7 +62,7 @@ impl NetworkDevice {
         let hb_handler = tokio::spawn(async move {
             let mut interval = 15;
 
-            // TODO: does it really matter?, would a device recover after a failure
+            // NOTE: does it really matter?, would a device recover after a failure
             let mut failed = false;
 
             loop {
@@ -75,7 +75,6 @@ impl NetworkDevice {
                         if failed {
                             warn!(id, "Heartbeat failed, error: {err}, closing device");
                             device_shutdown.cancel();
-                            let _ = remove_device(id).await;
                             return;
                         }
 
@@ -88,7 +87,6 @@ impl NetworkDevice {
                     if failed {
                         warn!(id, "Heartbeat failed, error: {err}, closing device");
                         device_shutdown.cancel();
-                        let _ = remove_device(id).await;
                         return;
                     }
 
@@ -114,8 +112,9 @@ impl NetworkDevice {
         addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
         udid: String,
+        lockdown_path: &Path,
     ) -> Result<(HeartbeatClient, IpAddr), RusbmuxError> {
-        let path = Path::new(LOCKDOWN_PATH).join(format!("{udid}.plist"));
+        let path = lockdown_path.join(format!("{udid}.plist"));
         let pairing_file = PairingFile::from_bytes(&tokio::fs::read(path).await?)?;
 
         let label = format!("rusbmux_{udid}_heartbeat_client");
@@ -170,10 +169,18 @@ impl NetworkDevice {
     pub fn shutdown(&self) {
         self.core.canceler.cancel();
     }
+
+    pub fn id(&self) -> u64 {
+        self.core.id
+    }
+
+    pub fn canceler(&self) -> CancellationToken {
+        self.core.canceler.clone()
+    }
 }
 
 impl NetworkDevice {
-    pub fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
+    pub(crate) fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
         let mut network_address = [0u8; 128];
         match self.addr {
             IpAddr::V4(ipv4) => {

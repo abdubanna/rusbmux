@@ -11,10 +11,9 @@ use clap::{
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, info};
 
-use crate::{
-    handler::LOCKDOWN_PATH,
-    parser::usbmux::{UsbMuxCommon, UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxVersion},
-};
+use rusbmux::usbmux::{UsbMuxCommon, UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxVersion};
+
+use crate::{daemon::ConnectionStream, handler::LOCKDOWN_PATH};
 
 /// rusbmux - a usbmuxd replacement in Rust
 #[derive(Parser, Debug)]
@@ -148,7 +147,7 @@ pub async fn run_add_device(args: AddDeviceArgs, socket: String) -> Result<()> {
     handle_result(number, udid, &args, &socket, plist)
 }
 
-async fn connect(socket: &str) -> Result<Box<dyn crate::ReadWrite>> {
+async fn connect(socket: &str) -> Result<ConnectionStream> {
     let connect_timeout = Duration::from_secs(5);
 
     #[cfg(unix)]
@@ -170,7 +169,7 @@ async fn connect(socket: &str) -> Result<Box<dyn crate::ReadWrite>> {
                 };
                 anyhow::Error::from(err).context(base)
             })?;
-        Ok(Box::new(conn))
+        Ok(conn)
     }
 
     #[cfg(windows)]
@@ -182,7 +181,7 @@ async fn connect(socket: &str) -> Result<Box<dyn crate::ReadWrite>> {
             .with_context(|| format!("timed out connecting to daemon at '{socket}'"))?
             .with_context(|| format!("failed to connect to daemon at '{socket}'"))?;
         let _ = conn.set_nodelay(true);
-        Ok(Box::new(conn))
+        Ok(conn)
     }
 }
 

@@ -6,7 +6,7 @@ use idevice::{
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::{error::RusbmuxError, handler::LOCKDOWN_PATH};
+use crate::error::RusbmuxError;
 
 const ASSERTION_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const RENEWAL_INTERVAL: Duration = Duration::from_secs(10 * 60);
@@ -27,24 +27,27 @@ impl PowerAssertion {
         addr: IpAddr,
         scope_id: Option<u32>,
         udid: &str,
+        lockdown_path: &Path,
     ) -> Result<Self, RusbmuxError> {
-        let assertion = Assertion::new(addr, scope_id, udid).await?;
+        let assertion = Assertion::new(addr, scope_id, udid, lockdown_path).await?;
 
         info!(udid, "Holding a power assertion");
 
         let udid = udid.to_string();
+        let lockdown_path = lockdown_path.to_path_buf();
         let renewal_handler = tokio::spawn(async move {
             let mut assertion = assertion;
             loop {
                 tokio::time::sleep(RENEWAL_INTERVAL).await;
 
-                let new_assertion = match Assertion::new(addr, scope_id, &udid).await {
-                    Ok(assertion) => assertion,
-                    Err(err) => {
-                        warn!(udid, %err, "Failed to renew the power assertion");
-                        return;
-                    }
-                };
+                let new_assertion =
+                    match Assertion::new(addr, scope_id, &udid, &lockdown_path).await {
+                        Ok(assertion) => assertion,
+                        Err(err) => {
+                            warn!(udid, %err, "Failed to renew the power assertion");
+                            return;
+                        }
+                    };
 
                 drop(assertion);
                 assertion = new_assertion;
@@ -60,12 +63,17 @@ impl PowerAssertion {
 struct Assertion(Idevice);
 
 impl Assertion {
-    async fn new(addr: IpAddr, scope_id: Option<u32>, udid: &str) -> Result<Self, RusbmuxError> {
+    async fn new(
+        addr: IpAddr,
+        scope_id: Option<u32>,
+        udid: &str,
+        lockdown_path: &Path,
+    ) -> Result<Self, RusbmuxError> {
         let provider = TcpProvider {
             addr,
             scope_id,
             pairing_file: PairingFile::from_bytes(
-                &tokio::fs::read(Path::new(LOCKDOWN_PATH).join(format!("{udid}.plist"))).await?,
+                &tokio::fs::read(lockdown_path.join(format!("{udid}.plist"))).await?,
             )?,
             label: format!("rusbmux_{udid}_power_assertion"),
         };

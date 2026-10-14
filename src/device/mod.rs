@@ -1,9 +1,9 @@
-pub mod core;
+pub(crate) mod core;
 pub mod network;
-pub mod packet_router;
-pub mod power_assertion;
+pub(crate) mod packet_router;
+mod power_assertion;
 pub mod usb;
-use std::{borrow::Cow, net::IpAddr};
+use std::{borrow::Cow, net::IpAddr, path::Path};
 
 use crossfire::{MAsyncTx, mpsc};
 use network::NetworkDevice;
@@ -35,19 +35,20 @@ impl Device {
         }
     }
 
+    #[inline]
     pub const fn is_usb(&self) -> bool {
         matches!(self.connection_type(), ConnectionType::Usb)
     }
 
+    #[inline]
     pub const fn is_network(&self) -> bool {
         matches!(self.connection_type(), ConnectionType::Network)
     }
 
-    #[must_use]
     pub fn id(&self) -> u64 {
         match self {
-            Self::Network(dev) => dev.core.id,
-            Self::Usb(dev) => dev.shared.core.id,
+            Self::Network(dev) => dev.id(),
+            Self::Usb(dev) => dev.id(),
         }
     }
 
@@ -79,9 +80,19 @@ impl Device {
         mac_address: String,
         service_name: String,
         udid: String,
+        lockdown_path: &Path,
     ) -> Result<Self, RusbmuxError> {
         Ok(Self::Network(
-            NetworkDevice::new(id, addr, scope_id, mac_address, service_name, udid).await?,
+            NetworkDevice::new(
+                id,
+                addr,
+                scope_id,
+                mac_address,
+                service_name,
+                udid,
+                lockdown_path,
+            )
+            .await?,
         ))
     }
 

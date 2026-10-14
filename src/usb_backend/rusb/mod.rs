@@ -10,7 +10,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_lite::StreamExt;
+use futures::StreamExt;
 use rusb::UsbContext;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, info};
@@ -217,14 +217,14 @@ impl UsbBackend for RusbBackend {
     > {
         ensure_event_thread();
 
-        let mut stream = DeviceHotplugStream::new()?.filter_map(|event| {
+        let mut stream = Box::pin(DeviceHotplugStream::new()?.filter_map(|event| async {
             // don't include the connected event if it's not an apple devices
             if matches!(&event, UsbEvent::Arrived(dev) if dev.device_descriptor().map(|dd|dd.vendor_id() != APPLE_VID).unwrap_or(true)) {
                 return None;
             }
 
             Some(event)
-        });
+        }));
 
         Ok(Box::pin(async_stream::stream! {
             let mut devices_id_map = HashMap::new();
@@ -246,7 +246,7 @@ impl UsbBackend for RusbBackend {
     }
 }
 
-pub fn get_serial_number(
+pub(super) fn get_serial_number(
     device: &rusb::Device<rusb::GlobalContext>,
     desc: &rusb::DeviceDescriptor,
 ) -> Option<String> {
@@ -263,11 +263,11 @@ pub fn get_serial_number(
         .ok()
 }
 
-pub fn opaque_id(device: &rusb::Device<rusb::GlobalContext>) -> u64 {
+pub(super) fn opaque_id(device: &rusb::Device<rusb::GlobalContext>) -> u64 {
     (device.bus_number() as u64) << 8 | device.address() as u64
 }
 
-pub(crate) fn device_endpoints(
+pub(super) fn device_endpoints(
     device: &rusb::Device<rusb::GlobalContext>,
     handle: Arc<rusb::DeviceHandle<rusb::GlobalContext>>,
 ) -> Result<(u8, u8, u16), RusbmuxError> {

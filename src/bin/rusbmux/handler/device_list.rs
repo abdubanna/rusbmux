@@ -1,9 +1,9 @@
-use crate::{
-    AsyncWriting,
+use rusbmux::{
     error::RusbmuxError,
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
-    watcher::CONNECTED_DEVICES,
+    usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
+
+use crate::{daemon::ConnectionStream, watcher::CONNECTED_DEVICES};
 
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
@@ -34,7 +34,7 @@ pub async fn devices_plist() -> Result<plist::Value, RusbmuxError> {
 }
 
 pub async fn handle_device_list(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
     let devices_plist = devices_plist().await?;
@@ -47,7 +47,7 @@ pub async fn handle_device_list(
         UsbMuxMsgType::MessagePlist,
         tag,
     );
-    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+    client.write_all(&usbmux_packet).await.inspect_err(|err| {
         if !crate::utils::is_disconnect_io(err) {
             error!(tag, %err, "Failed to send device list packet")
         }

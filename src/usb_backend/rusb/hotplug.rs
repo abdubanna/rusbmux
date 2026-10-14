@@ -4,16 +4,16 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures_lite::{Stream, StreamExt};
+use futures::{Stream, StreamExt};
 
 use crate::usb_backend::APPLE_VID;
 
-pub enum UsbEvent {
+pub(super) enum UsbEvent {
     Arrived(::rusb::Device<::rusb::GlobalContext>),
     Left(::rusb::Device<::rusb::GlobalContext>),
 }
 
-pub struct PollingStream {
+pub(super) struct PollingStream {
     rx: tokio::sync::mpsc::UnboundedReceiver<UsbEvent>,
 }
 
@@ -86,7 +86,7 @@ impl Stream for PollingStream {
     }
 }
 
-pub struct HotplugStream {
+pub(super) struct HotplugStream {
     _registration: ::rusb::Registration<::rusb::GlobalContext>,
     rx: tokio::sync::mpsc::UnboundedReceiver<UsbEvent>,
 }
@@ -129,7 +129,7 @@ impl Stream for HotplugStream {
     }
 }
 
-pub enum DeviceHotplugStream {
+pub(super) enum DeviceHotplugStream {
     Hotplug(HotplugStream),
     Polling(PollingStream),
 }
@@ -148,8 +148,8 @@ impl Stream for DeviceHotplugStream {
     type Item = UsbEvent;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.get_mut() {
-            Self::Hotplug(hotplug) => hotplug.poll_next(cx),
-            Self::Polling(polling) => polling.poll_next(cx),
+            Self::Hotplug(hotplug) => hotplug.poll_next_unpin(cx),
+            Self::Polling(polling) => polling.poll_next_unpin(cx),
         }
     }
 }

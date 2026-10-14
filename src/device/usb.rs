@@ -8,6 +8,7 @@ use crossfire::{AsyncRx, MAsyncTx, mpsc};
 use etherparse::TcpHeader;
 use pack1::U16BE;
 use tokio::{io::AsyncWriteExt, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -18,9 +19,7 @@ use crate::{
         UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2, UsbDevicePacketPayload,
         UsbDevicePacketVersion,
     },
-    usb_backend::{
-        AnyDeviceHandle, AnyDeviceInfo, AnyEndpointReader, AnyEndpointWriter, UsbAsyncWriteEndpoint,
-    },
+    usb_backend::{AnyDeviceHandle, AnyDeviceInfo, AnyEndpointReader, AnyEndpointWriter},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -31,22 +30,23 @@ pub struct IODisconnectedDevice {
 
 #[derive(Debug, Clone)]
 pub struct UsbDeviceShared {
-    pub core: DeviceCore,
-    pub router: Arc<PacketRouter>,
-    pub writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
-    pub udid: String,
+    pub(crate) core: DeviceCore,
+    pub(crate) router: Arc<PacketRouter>,
+    writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+    udid: String,
 }
 
 #[derive(Debug)]
 pub struct UsbDevice {
-    pub shared: UsbDeviceShared,
-    pub handler: AnyDeviceHandle,
+    shared: UsbDeviceShared,
+    _handler: AnyDeviceHandle,
 
-    pub speed: Option<u64>,
-    pub location_id: u32,
-    pub product_id: u16,
+    speed: Option<u64>,
+    location_id: u32,
+    product_id: u16,
 
-    pub version: UsbDevicePacketVersion,
+    // TODO: drop it if unnecessary
+    _version: UsbDevicePacketVersion,
 
     reader_loop_handler: JoinHandle<()>,
     writer_loop_handler: JoinHandle<()>,
@@ -55,75 +55,6 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
-    /// # Safety
-    ///
-    /// make sure you already sent the `UsbDevicePacketProtocol::Setup` packet
-    pub async unsafe fn new_from(
-        info: AnyDeviceInfo,
-        id: u64,
-        version: UsbDevicePacketVersion,
-        disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
-    ) -> Result<Self, RusbmuxError> {
-        debug!(device_id = id, "Creating device from existing state");
-        let udid = info
-            .udid()
-            .ok_or(RusbmuxError::InvalidData("USB device has no serial number"))?
-            .into_owned();
-        let device_handle = info.open().await?;
-
-        let (end_in, end_out) = device_handle.endpoint().await?;
-
-        let (tx, rx) = mpsc::bounded_async(256);
-
-        let router = Arc::new(PacketRouter::new());
-        let router2 = Arc::clone(&router);
-
-        let core = DeviceCore::new(id);
-
-        let recv_seq = Arc::new(AtomicU16::new(0));
-        let recv_seq2 = Arc::clone(&recv_seq);
-
-        let canceler = core.canceler.clone();
-        let canceler2 = core.canceler.clone();
-
-        let opaque_id = info.opaque_id();
-
-        info!(device_id = id, "Spawning reader & writer loops");
-
-        let reader_loop_handler = tokio::spawn(async move {
-            tokio::select! {
-                _ = Self::start_reader_loop(router2, recv_seq2, disconnected_tx,  end_in, id, opaque_id) => {}
-                _ = canceler.cancelled() => {}
-            }
-        });
-
-        let writer_loop_handler = tokio::spawn(async move {
-            tokio::select! {
-                _ = Self::start_writer_loop(recv_seq, rx, end_out, id) => {}
-                _ = canceler2.cancelled() => {}
-            }
-        });
-
-        debug!(device_id = id, "Device created");
-
-        Ok(Self {
-            shared: UsbDeviceShared {
-                core,
-                router,
-                writer_tx: tx,
-                udid,
-            },
-            handler: device_handle,
-            speed: info.speed(),
-            location_id: info.location_id(),
-            product_id: info.product_id(),
-            version,
-            reader_loop_handler,
-            writer_loop_handler,
-            dropped: AtomicBool::new(false),
-        })
-    }
-
     pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Self, RusbmuxError> {
         Self::new_with_disconnect_tx(info, id, None).await
     }
@@ -219,11 +150,11 @@ impl UsbDevice {
                 writer_tx: tx,
                 udid,
             },
-            handler: device_handle,
+            _handler: device_handle,
             speed: info.speed(),
             location_id: info.location_id(),
             product_id: info.product_id(),
-            version,
+            _version: version,
             reader_loop_handler,
             writer_loop_handler,
             dropped: AtomicBool::new(false),
@@ -438,18 +369,8 @@ impl UsbDevice {
         Ok(conn)
     }
 
-    #[inline]
-    pub fn shared(&self) -> UsbDeviceShared {
-        self.shared.clone()
-    }
-
-    #[inline]
-    pub fn udid(&self) -> &str {
-        &self.shared.udid
-    }
-
     pub async fn cleanup_conn(&self, conn: &UsbDeviceConn) -> Result<(), RusbmuxError> {
-        let source_port = conn.source_port;
+        let source_port = conn.source_port();
 
         if let Some(pe) = self.shared.router.unregister(source_port)
             && let Some(conn) = pe.conn.and_then(|conn| conn.upgrade())
@@ -534,6 +455,26 @@ impl UsbDevice {
 
         Ok(())
     }
+
+    #[inline]
+    pub fn core(&self) -> DeviceCore {
+        self.shared.core.clone()
+    }
+
+    #[inline]
+    pub fn id(&self) -> u64 {
+        self.shared.core.id
+    }
+
+    #[inline]
+    pub fn udid(&self) -> &str {
+        self.shared.udid()
+    }
+
+    #[inline]
+    pub fn shared(&self) -> UsbDeviceShared {
+        self.shared.clone()
+    }
 }
 
 impl Drop for UsbDevice {
@@ -583,5 +524,23 @@ impl UsbDevice {
                 "SerialNumber": udid,
             }
         }))
+    }
+}
+
+impl UsbDeviceShared {
+    pub fn udid(&self) -> &str {
+        &self.udid
+    }
+
+    pub fn id(&self) -> u64 {
+        self.core.id
+    }
+
+    pub fn get_writer(&self) -> MAsyncTx<crossfire::mpsc::Array<UsbDevicePacket>> {
+        self.writer_tx.clone()
+    }
+
+    pub fn canceler(&self) -> CancellationToken {
+        self.core.canceler.clone()
     }
 }

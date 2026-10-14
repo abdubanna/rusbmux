@@ -50,7 +50,7 @@ impl TcpHandshake {
         tx.send(tcp_syn).await?;
         trace!(source_port, destination_port, "Sent SYN");
 
-        let tcp_syn_ack = rx.0.recv().await?;
+        let tcp_syn_ack = rx.recv().await?;
 
         let tcp_syn_ack_tcp_hdr =
             tcp_syn_ack
@@ -121,20 +121,20 @@ impl TcpHandshake {
 
 #[derive(Debug)]
 pub struct UsbDeviceConn {
-    pub device_core: DeviceCore,
-    pub sent_bytes: AtomicU32,
-    pub received_bytes: AtomicU32,
+    device_core: DeviceCore,
+    sent_bytes: AtomicU32,
+    received_bytes: AtomicU32,
 
-    pub source_port: u16,
-    pub destination_port: u16,
+    source_port: u16,
+    destination_port: u16,
 
-    pub sendable_bytes: AtomicUsize,
+    sendable_bytes: AtomicUsize,
 
-    pub device_last_window_size: AtomicU16,
-    pub device_last_received_bytes: AtomicU32,
+    device_last_window_size: AtomicU16,
+    device_last_received_bytes: AtomicU32,
 
-    pub rx: SAsyncPacketRx,
-    pub tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+    rx: SAsyncPacketRx,
+    tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
 
     dropped: AtomicBool,
 }
@@ -145,7 +145,7 @@ pub struct UsbDeviceConn {
 const AUTO_SEQ: u16 = 0;
 
 impl UsbDeviceConn {
-    pub const WINDOW_SIZE: u16 = ((128u32 * 1024) >> 8) as u16;
+    pub(crate) const WINDOW_SIZE: u16 = ((128u32 * 1024) >> 8) as u16;
 
     /// # Safety
     ///
@@ -154,7 +154,7 @@ impl UsbDeviceConn {
     //
     //  TODO: do a dump states method and let this take that
     #[allow(clippy::too_many_arguments)]
-    pub unsafe fn new_from(
+    pub(crate) unsafe fn new_from(
         device_core: &DeviceCore,
         destination_port: u16,
         source_port: u16,
@@ -191,7 +191,7 @@ impl UsbDeviceConn {
         })
     }
 
-    pub async fn new(
+    pub(crate) async fn new(
         device: &UsbDevice,
         source_port: u16,
         destination_port: u16,
@@ -207,7 +207,7 @@ impl UsbDeviceConn {
         );
 
         Ok(Arc::new(Self {
-            device_core: device.shared.core.clone(),
+            device_core: device.core(),
             sent_bytes: AtomicU32::new(handshake.sent_bytes),
             received_bytes: AtomicU32::new(handshake.received_bytes),
             source_port,
@@ -244,7 +244,7 @@ impl UsbDeviceConn {
         self.send_packet(packet).await
     }
 
-    pub async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
+    async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
         let payload_len = packet.payload.len() as u32;
 
         self.tx.send(packet).await?;
@@ -277,7 +277,7 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
+    pub(crate) fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
         debug!(
             source_port = self.source_port,
             destination_port = self.destination_port,
@@ -305,7 +305,7 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub async fn send_rst(&self) -> Result<(), RusbmuxError> {
+    pub(crate) async fn send_rst(&self) -> Result<(), RusbmuxError> {
         debug!(
             source_port = self.source_port,
             destination_port = self.destination_port,
@@ -333,7 +333,7 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub async fn ack(&self) -> Result<(), RusbmuxError> {
+    async fn ack(&self) -> Result<(), RusbmuxError> {
         let tcp_ack = self.build_flag(TcpFlags::ACK);
 
         self.tx.send(tcp_ack).await?;
@@ -349,7 +349,7 @@ impl UsbDeviceConn {
     }
 
     pub async fn recv(&self) -> Result<UsbDevicePacket, RusbmuxError> {
-        let response = self.rx.0.recv().await?;
+        let response = self.rx.recv().await?;
 
         self.update_states(&response);
 
@@ -361,7 +361,7 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn build_bytes(&self, value: Bytes) -> UsbDevicePacket {
+    pub(crate) fn build_bytes(&self, value: Bytes) -> UsbDevicePacket {
         UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -376,8 +376,8 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn build_flag(&self, tcp_flag: TcpFlags) -> UsbDevicePacket {
-        // TODO: can this be pre-built for performance? does it matter?
+    pub(crate) fn build_flag(&self, tcp_flag: TcpFlags) -> UsbDevicePacket {
+        // NOTE: can this be pre-built for performance? does it matter?
         UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -390,7 +390,7 @@ impl UsbDeviceConn {
             .build()
     }
 
-    pub fn update_states(&self, packet: &UsbDevicePacket) {
+    pub(crate) fn update_states(&self, packet: &UsbDevicePacket) {
         let recv_bytes = packet.payload.len() as u32;
 
         if let Some(ref tcp_hdr) = packet.tcp_hdr {
@@ -401,7 +401,7 @@ impl UsbDeviceConn {
         }
     }
 
-    pub fn update_sendable_bytes(&self) {
+    pub(crate) fn update_sendable_bytes(&self) {
         let sendable = Self::calc_sendable_bytes(
             self.get_sent_bytes(),
             self.get_device_last_window_size(),
@@ -440,12 +440,12 @@ impl UsbDeviceConn {
 // atomic setters and getters
 impl UsbDeviceConn {
     #[inline]
-    pub fn get_sent_bytes(&self) -> u32 {
+    fn get_sent_bytes(&self) -> u32 {
         self.sent_bytes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[inline]
-    pub fn get_received_bytes(&self) -> u32 {
+    fn get_received_bytes(&self) -> u32 {
         self.received_bytes
             .load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -457,37 +457,37 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn set_sendable_bytes(&self, value: usize) {
+    fn set_sendable_bytes(&self, value: usize) {
         self.sendable_bytes
             .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[inline]
-    pub fn get_device_last_window_size(&self) -> u16 {
+    fn get_device_last_window_size(&self) -> u16 {
         self.device_last_window_size
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[inline]
-    pub fn set_device_last_window_size(&self, value: u16) {
+    fn set_device_last_window_size(&self, value: u16) {
         self.device_last_window_size
             .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[inline]
-    pub fn get_device_last_received_bytes(&self) -> u32 {
+    fn get_device_last_received_bytes(&self) -> u32 {
         self.device_last_received_bytes
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[inline]
-    pub fn set_device_last_received_bytes(&self, value: u32) {
+    fn set_device_last_received_bytes(&self, value: u32) {
         self.device_last_received_bytes
             .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[inline]
-    pub fn set_received_bytes(&self, value: u32) {
+    fn set_received_bytes(&self, value: u32) {
         self.received_bytes
             .store(value, std::sync::atomic::Ordering::Relaxed);
 
@@ -501,7 +501,7 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn add_sent_bytes(&self, value: u32) {
+    pub(crate) fn add_sent_bytes(&self, value: u32) {
         self.sent_bytes
             .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
 
@@ -520,9 +520,29 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn set_dropped(&self) {
+    fn set_dropped(&self) {
         self.dropped
             .store(true, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn device_id(&self) -> u64 {
+        self.device_core.id
+    }
+
+    #[inline]
+    pub fn destination_port(&self) -> u16 {
+        self.destination_port
+    }
+
+    #[inline]
+    pub fn source_port(&self) -> u16 {
+        self.source_port
+    }
+
+    #[inline]
+    pub fn get_tx(&self) -> MAsyncTx<crossfire::mpsc::Array<UsbDevicePacket>> {
+        self.tx.clone()
     }
 }
 

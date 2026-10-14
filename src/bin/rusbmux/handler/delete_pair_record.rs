@@ -2,28 +2,27 @@ use std::{io::ErrorKind, path::Path};
 
 use tracing::{debug, error};
 
-use crate::{
-    AsyncWriting,
-    error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, send_result},
-    parser::usbmux::UsbMuxResult,
-};
+use rusbmux::{error::RusbmuxError, usbmux::UsbMuxResult};
+
+use crate::daemon::ConnectionStream;
+
+use super::{LOCKDOWN_PATH, send_result};
 
 pub async fn handle_delete_pair_record(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     pair_record_id: String,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
     match delete_pair_record(pair_record_id, tag).await {
-        Ok(()) => send_result(writer, UsbMuxResult::OK, tag).await?,
+        Ok(()) => send_result(client, UsbMuxResult::OK, tag).await?,
         Err(err) => {
             match err {
                 RusbmuxError::UnexpectedPacket(_) => {
-                    send_result(writer, UsbMuxResult::BadCommand, tag).await?;
+                    send_result(client, UsbMuxResult::BadCommand, tag).await?;
                 }
 
                 RusbmuxError::IO(ref io_err) if io_err.kind() == ErrorKind::NotFound => {
-                    send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
+                    send_result(client, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
                 }
                 _ => {}
             }

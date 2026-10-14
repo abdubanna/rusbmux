@@ -1,20 +1,14 @@
-use std::{collections::HashMap, net::IpAddr, path::Path};
+use std::{collections::HashMap, net::IpAddr, path::Path, pin::Pin};
 
-use futures_lite::Stream;
+use futures::{Stream, StreamExt, stream::FuturesUnordered};
 use idevice::{
     mdns::{decode_auth_tag, derive_auth_tag},
     pairing_file::PairingFile,
 };
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
-use crate::{
-    device::Device,
-    error::RusbmuxError,
-    handler::LOCKDOWN_PATH,
-    usb_backend::next_device_id,
-    watcher::{DeviceEvent, get_hotplug_event_tx},
-};
+use crate::{device::Device, error::RusbmuxError, usb_backend::next_device_id};
 
 #[derive(Debug)]
 pub enum NetworkEvent {
@@ -22,119 +16,96 @@ pub enum NetworkEvent {
     Disconnected(u64),
 }
 
-use super::CONNECTED_DEVICES;
+const SERVICE_TYPE: &str = "_apple-mobdev2._tcp.local.";
 
-pub const SERVICE_TYPE: &str = "_apple-mobdev2._tcp.local.";
+pub fn watch_network(
+    // TODO: use a more friendlier way for library mode
+    lockdown_path: &Path,
+) -> Pin<Box<impl Stream<Item = Result<NetworkEvent, RusbmuxError>>>> {
+    Box::pin(async_stream::stream! {
+        let mdns = ServiceDaemon::new()?;
 
-// TODO: use the watch_network()
-pub async fn watch_network_daemon() {
-    let Ok(mdns) = ServiceDaemon::new() else {
-        error!("Failed to create mDNS daemon");
-        return;
-    };
-
-    let Ok(receiver) = mdns.browse(SERVICE_TYPE) else {
-        error!("Failed to browse mDNS");
-        return;
-    };
-
-    // TODO: it should probably retry if recv_async failed
-    while let Ok(event) = receiver.recv_async().await {
-        match event {
-            ServiceEvent::ServiceResolved(rs) => {
-                tokio::spawn(network_device_add(rs));
-            }
-            ServiceEvent::ServiceRemoved(_, name) => {
-                let Some(mac_address) = name.split('@').next() else {
-                    debug!(
-                        service_name = name,
-                        "`@` was not found in the removed service name"
-                    );
-                    continue;
-                };
-
-                debug!(mac_address, "Removing network device");
-
-                let Some(id) = crate::utils::find_network_id_by_mac_address(mac_address) else {
-                    debug!(mac_address, "Network device is not connected, skipping");
-                    continue;
-                };
-
-                let Some((_, device)) = CONNECTED_DEVICES.remove(&id) else {
-                    warn!(id, "Device was already removed from CONNECTED_DEVICES ?");
-                    continue;
-                };
-                let _ = device.shutdown().await;
-
-                // dedup
-                if !crate::utils::has_usb_with_udid(&device.udid()) {
-                    let _ = get_hotplug_event_tx()
-                        .await
-                        .send(DeviceEvent::Detached { id });
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxError>> {
-    async_stream::stream! {
-        let mdns = ServiceDaemon::new().map_err(|err| {
-            RusbmuxError::UnexpectedPacket(format!("Failed to create mDNS daemon: {err}"))
-        })?;
-
-        let receiver = mdns.browse(SERVICE_TYPE).map_err(|err| {
-            RusbmuxError::UnexpectedPacket(format!("Failed to browse mDNS: {err}"))
-        })?;
+        let receiver = mdns.browse(SERVICE_TYPE)?;
 
         let mut devices_id_map = HashMap::new();
-        while let Ok(event) = receiver.recv_async().await {
-            match event {
-                ServiceEvent::ServiceResolved(rs) => {
-                    let Some(rd) = resolve_service(rs) else {
-                        continue;
-                    };
 
-                    let id = next_device_id();
+        let mut devs_canceler = FuturesUnordered::new();
 
-                    let device = match Device::new_network(
-                        id,
-                        rd.addr,
-                        Some(rd.scope_id),
-                        rd.mac_address.clone(),
-                        rd.service_name,
-                        rd.udid
-                    ).await {
-                        Ok(d) => {d},
-                        Err(err) => {
-                            yield Err(err);
-                            continue
+        loop {
+            tokio::select! {
+                Ok(event) = receiver.recv_async() => {
+                    match event {
+                        ServiceEvent::ServiceResolved(rs) => {
+                            let Some(rd) = resolve_service(rs, lockdown_path) else {
+                                continue;
+                            };
+
+                            if devices_id_map.contains_key(&rd.mac_address) {
+                                continue;
+                            };
+
+                            let id = next_device_id();
+
+                            let device = match Device::new_network(
+                                id,
+                                rd.addr,
+                                Some(rd.scope_id),
+                                rd.mac_address.clone(),
+                                rd.service_name,
+                                rd.udid,
+                                lockdown_path
+                            ).await {
+                                Ok(d) => {d},
+                                Err(err) => {
+                                    yield Err(err);
+                                    continue
+                                }
+                            };
+
+                            let canceler = device.as_network().unwrap().canceler();
+                            let mac_address = rd.mac_address.clone();
+
+                            devs_canceler.push(async move {
+                                canceler.cancelled().await;
+
+                                mac_address
+                            });
+
+                            devices_id_map.insert(rd.mac_address, id);
+
+                            yield Ok(NetworkEvent::Connected(device));
+
                         }
-                    };
+                        ServiceEvent::ServiceRemoved(_, name) => {
+                            let Some(mac_address) = name.split('@').next() else {
+                                debug!(
+                                    service_name = name,
+                                    "`@` was not found in the removed service name"
+                                );
+                                continue;
+                            };
 
-                    devices_id_map.insert(rd.mac_address, id);
-
-                    yield Ok(NetworkEvent::Connected(device));
-
+                            if let Some(id) = devices_id_map.remove(mac_address) {
+                                yield Ok(NetworkEvent::Disconnected(id))
+                            };
+                        }
+                        _ => {}
+                    }
                 }
-                ServiceEvent::ServiceRemoved(_, name) => {
-                    let Some(mac_address) = name.split('@').next() else {
-                        debug!(
-                            service_name = name,
-                            "`@` was not found in the removed service name"
-                        );
-                        continue;
-                    };
 
-                    if let Some(id) = devices_id_map.get(mac_address) {
-                        yield Ok(NetworkEvent::Disconnected(*id))
-                    };
+                Some(mac_address) = devs_canceler.next(), if !devs_canceler.is_empty() => {
+                    if let Some(id) = devices_id_map.remove(&mac_address) {
+                        yield Ok(NetworkEvent::Disconnected(id))
+                    }
                 }
-                _ => {}
+
+                else => {
+                    yield Err(RusbmuxError::Mdns(mdns_sd::Error::DaemonShutdown));
+                    break;
+                }
             }
         }
-    }
+    })
 }
 
 struct ResolvedDevice {
@@ -145,7 +116,7 @@ struct ResolvedDevice {
     udid: String,
 }
 
-fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
+fn resolve_service(rs: Box<ResolvedService>, lockdown_path: &Path) -> Option<ResolvedDevice> {
     debug!("Discovered network device via mDNS: {rs:#?}");
     let addresses = rs.addresses.clone();
 
@@ -194,7 +165,7 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     let udid = if let Some(ident) = identifier
         && !auth_tags.is_empty()
     {
-        let Some(udid) = find_udid_from_txt(ident, &auth_tags) else {
+        let Some(udid) = find_udid_from_txt(ident, &auth_tags, lockdown_path) else {
             warn!("The device doesn't have a pairing file saved, skipping");
             return None;
         };
@@ -202,7 +173,7 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
         udid
     } else {
         // iOS < 26.4 fallback: parse MAC out of the instance name (`<MAC>@<id>.…`).
-        let Some(udid) = get_udid_from_mac_addr(mac_address) else {
+        let Some(udid) = get_udid_from_mac_addr(mac_address, lockdown_path) else {
             warn!(
                 mac_address,
                 "The device doesn't have a pairing file saved, skipping"
@@ -221,53 +192,11 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     })
 }
 
-async fn network_device_add(rs: Box<ResolvedService>) {
-    let Some(rd) = resolve_service(rs) else {
-        return;
-    };
-
-    // if the device broadcasted twice, and the first is still connecting to the heartbeat, this
-    // would get the device connect twice
-    //
-    // TODO: check on the resolved service it self
-    if crate::utils::has_network_with_udid(&rd.udid) {
-        debug!(udid = rd.udid, "Device already added, skipping");
-        return;
-    }
-
-    let device = match Device::new_network(
-        next_device_id(),
-        rd.addr,
-        Some(rd.scope_id),
-        rd.mac_address,
-        rd.service_name,
-        rd.udid.clone(),
-    )
-    .await
-    {
-        Ok(d) => d,
-        Err(err) => {
-            error!(udid = rd.udid, %err, "Couldn't create a new network device");
-            return;
-        }
-    };
-
-    let id = device.id();
-    CONNECTED_DEVICES.insert(id, device);
-
-    // prefer usb devices over network devices for the same udid
-    //
-    // skip hotplug notifications when the device is already connected via usb
-    //
-    // it would get notified only if the usb is disconnected
-    if !crate::utils::has_usb_with_udid(&rd.udid) {
-        let _ = super::get_hotplug_event_tx()
-            .await
-            .send(super::DeviceEvent::Attached { id });
-    }
-}
-
-fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> {
+fn find_udid_from_txt(
+    identifier: &[u8],
+    auth_tags: &[&[u8]],
+    lockdown_path: &Path,
+) -> Option<String> {
     if auth_tags.is_empty() {
         return None;
     }
@@ -283,7 +212,7 @@ fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> 
         return None;
     }
 
-    for (udid, PairingFile { host_id, .. }) in get_saved_pairing_files() {
+    for (udid, PairingFile { host_id, .. }) in get_saved_pairing_files(lockdown_path) {
         let expected = derive_auth_tag(host_id.as_bytes(), identifier);
         if decoded_tags.contains(&expected) {
             info!(udid, "TXT record matched UDID");
@@ -294,12 +223,28 @@ fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> 
     None
 }
 
+fn get_udid_from_mac_addr(mac_addr: &str, lockdown_path: &Path) -> Option<String> {
+    for (
+        udid,
+        PairingFile {
+            wifi_mac_address, ..
+        },
+    ) in get_saved_pairing_files(lockdown_path)
+    {
+        if mac_addr == wifi_mac_address {
+            return Some(udid);
+        }
+    }
+
+    None
+}
+
 /// gets all the valid pairing files along side it's file stem (udid)
-fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
-    let entries = match Path::new(LOCKDOWN_PATH).read_dir() {
+fn get_saved_pairing_files(lockdown_path: &Path) -> Vec<(String, PairingFile)> {
+    let entries = match lockdown_path.read_dir() {
         Ok(dirs) => dirs,
         Err(err) => {
-            debug!(%err, "Failed to read the directories of `{LOCKDOWN_PATH}`");
+            debug!(%err, "Failed to read the directories of `{lockdown_path:?}`");
             return Vec::new();
         }
     };
@@ -325,20 +270,4 @@ fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
             Some((udid, pf))
         })
         .collect()
-}
-
-fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
-    for (
-        udid,
-        PairingFile {
-            wifi_mac_address, ..
-        },
-    ) in get_saved_pairing_files()
-    {
-        if mac_addr == wifi_mac_address {
-            return Some(udid);
-        }
-    }
-
-    None
 }

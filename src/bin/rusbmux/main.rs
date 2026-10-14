@@ -1,9 +1,13 @@
 use anyhow::Context;
 use clap::Parser;
-use rusbmux::{
-    cli::{Cli, Commands},
-    daemon::LISTENER_PATH,
-};
+
+mod cli;
+mod daemon;
+mod handler;
+mod utils;
+mod watcher;
+pub use cli::{Cli, Commands};
+pub use daemon::LISTENER_PATH;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,14 +29,11 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            rusbmux::daemon::run(cli.socket)
-                .await
-                .context("daemon failed")?;
+            daemon::run(cli.socket).await.context("daemon failed")?;
         }
         Some(Commands::AddDevice(args)) => {
             if let Err(err) =
-                rusbmux::cli::run_add_device(args, cli.socket.unwrap_or(LISTENER_PATH.to_string()))
-                    .await
+                cli::run_add_device(args, cli.socket.unwrap_or(LISTENER_PATH.to_string())).await
             {
                 tracing::error!(%err, "AddDevice failed");
                 std::process::exit(1);

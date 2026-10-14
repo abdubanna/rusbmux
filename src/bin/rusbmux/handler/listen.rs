@@ -1,31 +1,23 @@
-use crate::{
-    AsyncWriting,
+use rusbmux::{
     error::RusbmuxError,
-    handler::send_result,
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
-    watcher::{CONNECTED_DEVICES, DeviceEvent, HOTPLUG_EVENT_TX},
+    usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 
-use tokio::{io::AsyncWriteExt, sync::broadcast};
+use crate::{
+    daemon::ConnectionStream,
+    watcher::{CONNECTED_DEVICES, DeviceEvent, get_hotplug_event_tx},
+};
+
+use super::send_result;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, info, trace, warn};
 
-pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(), RusbmuxError> {
-    // TODO: use get_hotplug_event_tx()
-    let mut event_receiver = match HOTPLUG_EVENT_TX
-        .get()
-        .ok_or(RusbmuxError::HotPlugNotSupported)
-        .map(broadcast::Sender::subscribe)
-    {
-        Ok(r) => r,
-        Err(err) => {
-            send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
-            return Err(err);
-        }
-    };
+pub async fn handle_listen(client: &mut ConnectionStream, tag: u32) -> Result<(), RusbmuxError> {
+    let mut event_receiver = get_hotplug_event_tx().await.subscribe();
 
-    send_result(writer, UsbMuxResult::OK, tag).await?;
+    send_result(client, UsbMuxResult::OK, tag).await?;
 
-    send_currently_connected(writer, tag).await?;
+    send_currently_connected(client, tag).await?;
 
     debug!(tag, "Listening for device attach/detach events");
 
@@ -55,7 +47,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
                     UsbMuxMsgType::MessagePlist,
                     tag,
                 );
-                writer
+                client
                     .write_all(&connected_packet)
                     .await
                     .inspect_err(|err| {
@@ -82,7 +74,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
                     UsbMuxMsgType::MessagePlist,
                     tag,
                 );
-                writer
+                client
                     .write_all(&disconnected_packet)
                     .await
                     .inspect_err(|err| {
@@ -102,10 +94,9 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
 }
 
 pub async fn send_currently_connected(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    // TODO: put it in a function
     for device in CONNECTED_DEVICES
         .iter()
         .filter(|dev| !crate::utils::is_shadowed(dev))
@@ -120,7 +111,7 @@ pub async fn send_currently_connected(
             UsbMuxMsgType::MessagePlist,
             tag,
         );
-        writer.write_all(&connected_packet).await.inspect_err(|err|
+        client.write_all(&connected_packet).await.inspect_err(|err|
             if !crate::utils::is_disconnect_io(err) {
                 error!(device_id = device.id(), tag, %err, "Failed to send initial device packet")
             }

@@ -1,23 +1,20 @@
-use crate::{
-    AsyncWriting,
+use rusbmux::{
     error::RusbmuxError,
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
-    watcher::HOTPLUG_EVENT_TX,
+    usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
+
+use crate::{daemon::ConnectionStream, watcher::get_hotplug_event_tx};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace};
 
 pub async fn handle_listeners_list(
-    writer: &mut impl AsyncWriting,
+    client: &mut ConnectionStream,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    // TODO: use get_hotplug_event_tx()
-    let event_tx = HOTPLUG_EVENT_TX
-        .get()
-        .ok_or(RusbmuxError::HotPlugNotSupported)?;
+    let listeners_count = get_hotplug_event_tx().await.receiver_count();
+    let mut listeners_plist = Vec::with_capacity(listeners_count);
 
-    let mut listeners_plist = vec![];
-    for _ in 0..event_tx.receiver_count() {
+    for _ in 0..listeners_count {
         listeners_plist.push(plist_macro::plist!({
             "Blacklisted": false,
             "ConnType": 0,
@@ -40,7 +37,7 @@ pub async fn handle_listeners_list(
     );
 
     trace!(tag, "Sending listeners list response");
-    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+    client.write_all(&usbmux_packet).await.inspect_err(|err| {
         if !crate::utils::is_disconnect_io(err) {
             error!(
                 tag,
@@ -50,11 +47,7 @@ pub async fn handle_listeners_list(
         }
     })?;
 
-    debug!(
-        tag,
-        listeners = event_tx.receiver_count(),
-        "Listeners list sent"
-    );
+    debug!(tag, listeners_count, "Listeners list sent");
 
     Ok(())
 }

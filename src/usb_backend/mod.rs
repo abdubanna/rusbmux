@@ -8,10 +8,10 @@ use std::{
 #[cfg(feature = "rusb")]
 use std::sync::Arc;
 
-use futures_lite::Stream;
+use futures::Stream;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{AsyncReading, AsyncWriting, error::RusbmuxError, parser::device_mux::UsbDevicePacket};
+use crate::{error::RusbmuxError, parser::device_mux::UsbDevicePacket};
 
 #[cfg(feature = "nusb")]
 mod nusb;
@@ -40,26 +40,16 @@ pub const DEFAULT_BACKEND: nusb::NusbBackend = nusb::NusbBackend;
 ))]
 pub const DEFAULT_BACKEND: rusb::RusbBackend = rusb::RusbBackend;
 
-pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
+pub(crate) type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
-pub const APPLE_VID: u16 = 0x5ac;
+pub(crate) const APPLE_VID: u16 = 0x5ac;
 
-pub const APPLE_USBMUX_CLASS: u8 = 255;
-pub const APPLE_USBMUX_SUBCLASS: u8 = 254;
-pub const APPLE_USBMUX_PROTOCOL: u8 = 2;
+pub(crate) const APPLE_USBMUX_CLASS: u8 = 255;
+pub(crate) const APPLE_USBMUX_SUBCLASS: u8 = 254;
+pub(crate) const APPLE_USBMUX_PROTOCOL: u8 = 2;
 
-pub const MAX_PACKET_SIZE: usize = 48 * 1024;
-pub const MAX_PACKET_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - UsbDevicePacket::HEADERS_LEN_V2;
-
-// descripes how to flush with ZLP end
-pub trait UsbAsyncWriteEndpoint: AsyncWriting {
-    fn submit_end(&mut self);
-}
-
-pub struct Endpoint {
-    pub reader: Box<dyn AsyncReading>,
-    pub writer: Box<dyn UsbAsyncWriteEndpoint>,
-}
+pub(crate) const MAX_PACKET_SIZE: usize = 48 * 1024;
+pub(crate) const MAX_PACKET_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - UsbDevicePacket::HEADERS_LEN_V2;
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -176,8 +166,8 @@ impl AsyncWrite for AnyEndpointWriter {
     }
 }
 
-impl UsbAsyncWriteEndpoint for AnyEndpointWriter {
-    fn submit_end(&mut self) {
+impl AnyEndpointWriter {
+    pub fn submit_end(&mut self) {
         match self {
             #[cfg(feature = "nusb")]
             Self::Nusb(w) => w.submit_end(),
@@ -392,7 +382,7 @@ pub trait UsbBackend: Send + Sync + 'static {
     > + Send;
 }
 
-pub static DEVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+pub(crate) static DEVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
 pub fn next_device_id() -> u64 {

@@ -279,12 +279,12 @@ Add rusbmux and the `idevice` features you need:
 rusbmux = { version = "0.2", default-features = false, features = ["nusb"] }
 idevice = "0.1.65"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-futures-lite = "2"
+futures = "0.3"
 
 ```
 
 ```rust,no_run
-use futures_lite::stream::StreamExt;
+use futures::stream::StreamExt;
 use idevice::{IdeviceService, services::lockdown::LockdownClient};
 use rusbmux::{
     device::Device,
@@ -303,9 +303,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     else {
         return Err("no USB device connected".into());
     };
-    println!("[{id}] device connected: {}", device.udid);
+    println!("[{id}] device connected: {}", device.udid());
 
-    let provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string());
+    let provider = RusbmuxProvider::new(&device, "rusbmux-example".to_string(), None);
 
     let mut lockdown = LockdownClient::connect(&provider).await?;
     let name = lockdown.get_value(Some("DeviceName"), None).await?;

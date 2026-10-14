@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use futures_lite::StreamExt;
+use futures::StreamExt;
 use nusb::{
     descriptors::TransferType,
     hotplug::HotplugEvent,
@@ -46,12 +46,12 @@ impl UsbBackend for NusbBackend {
 
     async fn watch_devices(&self) -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxError> {
         let mut devices_id_map = HashMap::new();
-        let mut devices_hotplug = nusb::watch_devices()
+        let mut devices_hotplug = Box::pin(nusb::watch_devices()
         .map_err(|err| {
             error!(%err, "Failed to create a device hotplug");
             RusbmuxError::HotPlugNotSupported
         })?
-        .filter_map(|event| {
+        .filter_map(|event| async {
             // don't include the connected event if it's not an apple devices
             if matches!(&event, HotplugEvent::Connected(dev) if dev.vendor_id() != super::APPLE_VID)
             {
@@ -59,7 +59,7 @@ impl UsbBackend for NusbBackend {
             }
 
             Some(event)
-        });
+        }));
 
         Ok(Box::pin(async_stream::stream! {
             let current_connected_devices = NusbBackend.list_devices().await;
@@ -91,7 +91,7 @@ impl UsbBackend for NusbBackend {
     }
 }
 
-pub(crate) async fn device_endpoints(
+pub(super) async fn device_endpoints(
     dev: &nusb::Device,
 ) -> Result<(EndpointRead<Bulk>, EndpointWrite<Bulk>), RusbmuxError> {
     let current_cfg = dev

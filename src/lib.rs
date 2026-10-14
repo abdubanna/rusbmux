@@ -19,7 +19,7 @@
 //! #    provider::RusbmuxProvider,
 //! #    device::Device
 //! # };
-//! # use futures_lite::stream::StreamExt;
+//! # use futures::stream::StreamExt;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,7 +34,7 @@
 //! };
 //!
 //! // rusbmux as an idevice provider — direct USB, no daemon
-//! let provider = RusbmuxProvider::new(&device, "my-app".to_string());
+//! let provider = RusbmuxProvider::new(&device, "my-app".to_string(), None);
 //!
 //! // any idevice service client can now connect over USB
 //! let mut lockdown = LockdownClient::connect(&provider).await?;
@@ -74,33 +74,18 @@
 #[cfg(all(not(feature = "rusb"), not(feature = "nusb")))]
 compile_error!("Need either the `rusb` feature or `nusb`");
 
-use tokio::io::{AsyncRead, AsyncWrite};
-
 pub mod conn;
-
-#[cfg(feature = "bin")]
-pub mod daemon;
-
-#[cfg(feature = "bin")]
-pub mod cli;
 
 pub mod device;
 pub mod error;
-pub mod handler;
-pub mod parser;
+
+mod parser;
+pub use parser::usbmux;
+
 pub mod provider;
 
 #[cfg(any(feature = "rusb", feature = "nusb"))]
 pub mod usb_backend;
 
-pub mod utils;
+pub(crate) mod utils;
 pub mod watcher;
-
-pub trait ReadWrite: AsyncRead + AsyncWrite + Unpin + Send + Sync {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> ReadWrite for T {}
-
-pub trait AsyncReading: AsyncRead + Unpin + Send + Sync {}
-impl<T: AsyncRead + Unpin + Send + Sync> AsyncReading for T {}
-
-pub trait AsyncWriting: AsyncWrite + Unpin + Send + Sync {}
-impl<T: AsyncWrite + Unpin + Send + Sync> AsyncWriting for T {}
