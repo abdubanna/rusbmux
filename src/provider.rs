@@ -363,8 +363,9 @@ impl AsyncWrite for RusbmuxStream {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if !self.conn.dropped() {
-            // TODO: it should set the dropped boolean if sent
             std::task::ready!(self.poll_send_flag(cx, TcpFlags::RST))?;
+
+            unsafe { self.conn.set_dropped() };
         }
 
         Poll::Ready(Ok(()))

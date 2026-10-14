@@ -264,15 +264,15 @@ impl UsbDeviceConn {
     }
 
     pub async fn close(&self) -> Result<(), RusbmuxError> {
-        self.set_dropped();
         self.send_rst().await?;
+        unsafe { self.set_dropped() };
 
         Ok(())
     }
 
     pub fn close_blocking(&mut self) -> Result<(), RusbmuxError> {
-        self.set_dropped();
         self.send_rst_blocking()?;
+        unsafe { self.set_dropped() };
 
         Ok(())
     }
@@ -520,7 +520,11 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    fn set_dropped(&self) {
+    // SAFETY:
+    //
+    // setting the device as dropped would prevent it from a clean shutdown, make sure you already
+    // sent an RST packet
+    pub unsafe fn set_dropped(&self) {
         self.dropped
             .store(true, std::sync::atomic::Ordering::Relaxed)
     }
