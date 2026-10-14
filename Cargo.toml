@@ -14,16 +14,16 @@ rust-version = "1.88"
 
 [dependencies]
 plist-macro = "0.1.6"
-plist = "1.10.0"
+plist = "1.10.1"
 
 bytemuck = "1.25.2"
 dashmap = "6.2.1"
 bytes = "1.12.1"
 
-nusb = { version = "0.2.5", features = ["tokio"], optional = true }
+nusb = { version = "0.2.8", features = ["tokio"], optional = true }
 rusb = { version = "0.9.4", optional = true }
 
-tokio = { version = "1.53.1", features = [
+tokio = { version = "1.53.3", features = [
   "fs",
   "io-util",
   "macros",
@@ -32,21 +32,21 @@ tokio = { version = "1.53.1", features = [
   "sync",
   "time",
 ] }
-tokio-util = "0.7.19"
+tokio-util = "0.7.20"
 
 futures = { version = "0.3.34", default-features = false }
 
-crossfire = { version = "3.1.19", features = ["tokio"] }
+crossfire = { version = "3.1.20", features = ["tokio"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
 ], optional = true }
 
-thiserror = "2.0.19"
+thiserror = "2.0.21"
 
-mdns-sd = "0.20.3"
+mdns-sd = "0.21.5"
 
-idevice = { version = "=0.1.65", default-features = false, features = [
+idevice = { version = "0.1.68", default-features = false, features = [
   "heartbeat",
   "mdns",
   "notification_proxy",
@@ -54,19 +54,19 @@ idevice = { version = "=0.1.65", default-features = false, features = [
   "ring",
   "tcp",
 ] }
-uuid = { version = "1.24.0", features = ["v4"] }
+uuid = { version = "1.26.1", features = ["v4"] }
 async-stream = "0.3.6"
 
 pack1 = "1.1.0"
-bitflags = "2.13.1"
+bitflags = "2.13.2"
 etherparse = "0.21.0"
 serde = { version = "1.0.229", features = ["derive"] }
-clap = { version = "4.5", features = ["derive"], optional = true }
+clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
-rustix = { version = "1.1.4", features = ["net"], optional = true }
-libc = "0.2.189"
+rustix = { version = "1.1.5", features = ["net"], optional = true }
+libc = "0.2.190"
 
 
 [target.'cfg(target_family = "windows")'.dependencies]
@@ -76,7 +76,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-idevice = { version = "=0.1.65", features = ["syslog_relay"] }
+idevice = { version = "0.1.68", features = ["syslog_relay"] }
 
 [features]
 default = ["bin", "nusb"]
