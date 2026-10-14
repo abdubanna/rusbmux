@@ -519,11 +519,11 @@ impl UsbDeviceConn {
         self.dropped.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// # Safety
+    ///
+    /// setting the device as dropped would prevent it from a clean shutdown, make sure you already
+    /// sent an RST packet
     #[inline]
-    // SAFETY:
-    //
-    // setting the device as dropped would prevent it from a clean shutdown, make sure you already
-    // sent an RST packet
     pub unsafe fn set_dropped(&self) {
         self.dropped
             .store(true, std::sync::atomic::Ordering::Relaxed)

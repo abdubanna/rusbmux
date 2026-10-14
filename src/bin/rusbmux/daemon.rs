@@ -1,6 +1,6 @@
 use crate::handler::LOCKDOWN_PATH;
 use rusbmux::error::RusbmuxError;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 #[cfg(unix)]
 pub type Listener = tokio::net::UnixListener;
@@ -92,7 +92,7 @@ pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
     {
         let path = std::path::Path::new(&socket);
         if path.exists() {
-            debug!("Socket file already exists, removing...");
+            tracing::debug!("Socket file already exists, removing...");
 
             if let Err(err) = std::fs::remove_file(path) {
                 warn!(%err, "Failed to remove existing socket file");
@@ -107,7 +107,7 @@ pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
 
     #[cfg(unix)]
     {
-        debug!("Setting the `ReuseAddr` socket option");
+        tracing::debug!("Setting the `ReuseAddr` socket option");
         if let Err(err) = rustix::net::sockopt::set_socket_reuseaddr(&listener, true) {
             warn!(%err, "Failed to set ReuseAddr socket option");
         }
@@ -126,7 +126,7 @@ pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        debug!("Setting the socket permissions to 666");
+        tracing::debug!("Setting the socket permissions to 666");
         if let Err(err) = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666)) {
             warn!(%err, "Failed to set socket permissions");
         }
