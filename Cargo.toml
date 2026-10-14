@@ -76,8 +76,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["full"] }
-idevice = { version = "=0.1.65", features = ["full"] }
+idevice = { version = "=0.1.65", features = ["syslog_relay"] }
 
 [features]
 default = ["bin", "nusb"]
