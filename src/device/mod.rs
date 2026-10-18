@@ -3,9 +3,10 @@ pub mod network;
 pub(crate) mod packet_router;
 mod power_assertion;
 pub mod usb;
-use std::{borrow::Cow, net::IpAddr, path::Path};
+use std::net::IpAddr;
 
 use crossfire::{MAsyncTx, mpsc};
+use idevice::pairing_file::PairingFile;
 use network::NetworkDevice;
 use usb::UsbDevice;
 
@@ -52,10 +53,10 @@ impl Device {
         }
     }
 
-    pub fn udid(&self) -> Cow<'_, str> {
+    pub fn udid(&self) -> Option<&str> {
         match self {
-            Self::Network(dev) => Cow::Borrowed(&dev.udid),
-            Self::Usb(dev) => Cow::Borrowed(dev.udid()),
+            Self::Network(dev) => dev.udid.as_deref(),
+            Self::Usb(dev) => dev.udid(),
         }
     }
 
@@ -77,22 +78,11 @@ impl Device {
         id: u64,
         addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
-        mac_address: String,
         service_name: String,
-        udid: String,
-        lockdown_path: &Path,
+        pairing_file: PairingFile,
     ) -> Result<Self, RusbmuxError> {
         Ok(Self::Network(
-            NetworkDevice::new(
-                id,
-                addr,
-                scope_id,
-                mac_address,
-                service_name,
-                udid,
-                lockdown_path,
-            )
-            .await?,
+            NetworkDevice::new(id, addr, scope_id, service_name, pairing_file).await?,
         ))
     }
 
@@ -130,7 +120,7 @@ impl Device {
         }
     }
 
-    pub fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
+    pub fn create_device_attached(&self) -> plist::Value {
         match self {
             Self::Usb(dev) => dev.create_device_attached(),
             Self::Network(dev) => dev.create_device_attached(),

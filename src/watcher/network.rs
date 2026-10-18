@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::IpAddr, path::Path, pin::Pin};
+use std::{collections::HashMap, net::IpAddr, pin::Pin};
 
 use futures::{Stream, StreamExt, stream::FuturesUnordered};
 use idevice::{
@@ -18,10 +18,48 @@ pub enum NetworkEvent {
 
 const SERVICE_TYPE: &str = "_apple-mobdev2._tcp.local.";
 
+/// Watches for network devices
+///
+/// `pairing_files` is an iterator over the available pairing files, you can
+/// provide a static collection of files or load them dynamically
+///
+/// A static collection can be passed directly:
+///
+/// ```rust,no_run
+/// # use idevice::pairing_file::PairingFile;
+/// # use rusbmux::watcher::watch_network;
+///
+/// let pairing_files = vec![
+///     PairingFile::from_bytes(todo!()).unwrap(),
+///     PairingFile::from_bytes(todo!()).unwrap(),
+/// ];
+///
+/// watch_network(pairing_files.into_iter());
+/// ```
+///
+/// For a dynamically changing source, use an iterator that loads the files
+/// when iteration begins:
+///
+/// ```rust,no_run
+/// # use idevice::pairing_file::PairingFile;
+/// # use rusbmux::watcher::watch_network;
+///
+/// fn get_pairing_files() -> Vec<PairingFile> {
+///     todo!()
+/// }
+///
+/// let pairing_files = std::iter::once_with(get_pairing_files).flatten();
+///
+/// watch_network(pairing_files);
+/// ```
 pub fn watch_network(
-    // TODO: use a more friendlier way for library mode
-    lockdown_path: &Path,
+    // TODO: use &PairingFile so it doesn't clone everytime
+    pairing_files: impl Iterator<Item = PairingFile> + Clone,
 ) -> Pin<Box<impl Stream<Item = Result<NetworkEvent, RusbmuxError>>>> {
+    // wrap each item in `Some`, and end it with a `None`; which acts as a null terminator
+    // for the endless cycle
+    let mut pairing_files = pairing_files.map(Some).chain(std::iter::once(None)).cycle();
+
     Box::pin(async_stream::stream! {
         let mdns = ServiceDaemon::new()?;
 
@@ -36,7 +74,10 @@ pub fn watch_network(
                 Ok(event) = receiver.recv_async() => {
                     match event {
                         ServiceEvent::ServiceResolved(rs) => {
-                            let Some(rd) = resolve_service(rs, lockdown_path) else {
+                            // take a snapshot of the current pairing files;
+                            let pairing_files = pairing_files.by_ref().take_while(Option::is_some).map(Option::unwrap);
+
+                            let Some(rd) = resolve_service(rs, pairing_files) else {
                                 continue;
                             };
 
@@ -50,10 +91,8 @@ pub fn watch_network(
                                 id,
                                 rd.addr,
                                 Some(rd.scope_id),
-                                rd.mac_address.clone(),
                                 rd.service_name,
-                                rd.udid,
-                                lockdown_path
+                                rd.pairing_file
                             ).await {
                                 Ok(d) => {d},
                                 Err(err) => {
@@ -113,10 +152,13 @@ struct ResolvedDevice {
     scope_id: u32,
     mac_address: String,
     service_name: String,
-    udid: String,
+    pairing_file: PairingFile,
 }
 
-fn resolve_service(rs: Box<ResolvedService>, lockdown_path: &Path) -> Option<ResolvedDevice> {
+fn resolve_service(
+    rs: Box<ResolvedService>,
+    pairing_files: impl Iterator<Item = PairingFile>,
+) -> Option<ResolvedDevice> {
     debug!("Discovered network device via mDNS: {rs:#?}");
     let addresses = rs.addresses.clone();
 
@@ -162,25 +204,25 @@ fn resolve_service(rs: Box<ResolvedService>, lockdown_path: &Path) -> Option<Res
     };
 
     // iOS 26.4+: match by Bonjour TXT record (identifier + authTag HMACs).
-    let udid = if let Some(ident) = identifier
+    let pairing_file = if let Some(ident) = identifier
         && !auth_tags.is_empty()
     {
-        let Some(udid) = find_udid_from_txt(ident, &auth_tags, lockdown_path) else {
+        let Some(pf) = find_udid_from_txt(ident, &auth_tags, pairing_files) else {
             warn!("The device doesn't have a pairing file saved, skipping");
             return None;
         };
 
-        udid
+        pf
     } else {
         // iOS < 26.4 fallback: parse MAC out of the instance name (`<MAC>@<id>.…`).
-        let Some(udid) = get_udid_from_mac_addr(mac_address, lockdown_path) else {
+        let Some(pf) = get_udid_from_mac_addr(mac_address, pairing_files) else {
             warn!(
                 mac_address,
                 "The device doesn't have a pairing file saved, skipping"
             );
             return None;
         };
-        udid
+        pf
     };
 
     Some(ResolvedDevice {
@@ -188,15 +230,15 @@ fn resolve_service(rs: Box<ResolvedService>, lockdown_path: &Path) -> Option<Res
         scope_id,
         mac_address: mac_address.to_string(),
         service_name: rs.fullname,
-        udid,
+        pairing_file,
     })
 }
 
 fn find_udid_from_txt(
     identifier: &[u8],
     auth_tags: &[&[u8]],
-    lockdown_path: &Path,
-) -> Option<String> {
+    pairing_files: impl Iterator<Item = PairingFile>,
+) -> Option<PairingFile> {
     if auth_tags.is_empty() {
         return None;
     }
@@ -212,62 +254,37 @@ fn find_udid_from_txt(
         return None;
     }
 
-    for (udid, PairingFile { host_id, .. }) in get_saved_pairing_files(lockdown_path) {
+    for pairing_file in pairing_files {
+        // NOTE: should we skip?
+        let Some(ref udid) = pairing_file.udid else {
+            continue;
+        };
+        let host_id = &pairing_file.host_id;
+
         let expected = derive_auth_tag(host_id.as_bytes(), identifier);
         if decoded_tags.contains(&expected) {
             info!(udid, "TXT record matched UDID");
-            return Some(udid);
+            return Some(pairing_file);
         }
     }
 
     None
 }
 
-fn get_udid_from_mac_addr(mac_addr: &str, lockdown_path: &Path) -> Option<String> {
-    for (
-        udid,
-        PairingFile {
-            wifi_mac_address, ..
-        },
-    ) in get_saved_pairing_files(lockdown_path)
-    {
-        if mac_addr == wifi_mac_address {
-            return Some(udid);
+fn get_udid_from_mac_addr(
+    mac_addr: &str,
+    pairing_files: impl Iterator<Item = PairingFile>,
+) -> Option<PairingFile> {
+    for pairing_file in pairing_files {
+        // NOTE: should we skip?
+        let Some(ref udid) = pairing_file.udid else {
+            continue;
+        };
+        if mac_addr == pairing_file.wifi_mac_address {
+            info!(udid, "WiFi mac address matched UDID");
+            return Some(pairing_file);
         }
     }
 
     None
-}
-
-/// gets all the valid pairing files along side it's file stem (udid)
-fn get_saved_pairing_files(lockdown_path: &Path) -> Vec<(String, PairingFile)> {
-    let entries = match lockdown_path.read_dir() {
-        Ok(dirs) => dirs,
-        Err(err) => {
-            debug!(%err, "Failed to read the directories of `{lockdown_path:?}`");
-            return Vec::new();
-        }
-    };
-
-    entries
-        .flatten()
-        .map(|di| di.path())
-        .map(|path| {
-            (
-                path.file_stem()
-                    .and_then(|fstem| fstem.to_str())
-                    .map(|s| s.to_string()),
-                path,
-            )
-        })
-        .flat_map(|(fstem, path)| {
-            let udid = fstem?;
-
-            let Ok(pf) = PairingFile::read_from_file(path) else {
-                return None;
-            };
-
-            Some((udid, pf))
-        })
-        .collect()
 }

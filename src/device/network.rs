@@ -1,7 +1,4 @@
-use std::{
-    net::{IpAddr, SocketAddr, SocketAddrV6},
-    path::Path,
-};
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 
 use idevice::{
     IdeviceService, heartbeat::HeartbeatClient, pairing_file::PairingFile, provider::TcpProvider,
@@ -28,7 +25,7 @@ pub struct NetworkDevice {
     pub mac_address: String,
     service_name: String,
 
-    pub udid: String,
+    pub udid: Option<String>,
 
     hb_handler: JoinHandle<()>,
     _power_assertion: PowerAssertion,
@@ -47,14 +44,15 @@ impl NetworkDevice {
         id: u64,
         addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
-        mac_address: String,
         service_name: String,
-        udid: String,
-        lockdown_path: &Path,
+        pairing_file: PairingFile,
     ) -> Result<Self, RusbmuxError> {
+        let udid = pairing_file.udid.clone();
+        let mac_address = pairing_file.wifi_mac_address.clone();
+
         let (mut heartbeat_client, addr) =
-            Self::connect_heartbeat_client(addr, scope_id, udid.clone(), lockdown_path).await?;
-        let power_assertion = PowerAssertion::new(addr, scope_id, &udid, lockdown_path).await?;
+            Self::connect_heartbeat_client(addr, scope_id, pairing_file.clone()).await?;
+        let power_assertion = PowerAssertion::new(addr, scope_id, pairing_file)?;
 
         let core = DeviceCore::new(id);
 
@@ -62,7 +60,6 @@ impl NetworkDevice {
         let hb_handler = tokio::spawn(async move {
             let mut interval = 15;
 
-            // NOTE: does it really matter?, would a device recover after a failure
             let mut failed = false;
 
             loop {
@@ -71,6 +68,7 @@ impl NetworkDevice {
                         failed = false;
                         i + 5
                     }
+                    // TODO: break if it's a socket error
                     Err(err) => {
                         if failed {
                             warn!(id, "Heartbeat failed, error: {err}, closing device");
@@ -100,8 +98,8 @@ impl NetworkDevice {
             core,
             addr,
             scope_id,
-            service_name,
             mac_address,
+            service_name,
             udid,
             hb_handler,
             _power_assertion: power_assertion,
@@ -111,22 +109,16 @@ impl NetworkDevice {
     async fn connect_heartbeat_client(
         addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
-        udid: String,
-        lockdown_path: &Path,
+        pairing_file: PairingFile,
     ) -> Result<(HeartbeatClient, IpAddr), RusbmuxError> {
-        let path = lockdown_path.join(format!("{udid}.plist"));
-        let pairing_file = PairingFile::from_bytes(&tokio::fs::read(path).await?)?;
-
-        let label = format!("rusbmux_{udid}_heartbeat_client");
-
-        let make_provider = |ip: IpAddr| TcpProvider {
+        let make_provider = |ip: IpAddr, pairing_file: PairingFile| TcpProvider {
             addr: ip,
             scope_id,
-            pairing_file: pairing_file.clone(),
-            label: label.clone(),
+            pairing_file,
+            label: "rusbmux_heartbeat_client".to_string(),
         };
 
-        let provider = make_provider(addr.0);
+        let provider = make_provider(addr.0, pairing_file);
 
         match HeartbeatClient::connect(&provider).await {
             Ok(client) => Ok((client, addr.0)),
@@ -134,7 +126,7 @@ impl NetworkDevice {
                 if let Some(second_ip) = addr.1 {
                     debug!("Failed to connect to {}, trying {second_ip}", addr.0);
 
-                    let provider = make_provider(second_ip);
+                    let provider = make_provider(second_ip, provider.pairing_file);
 
                     match HeartbeatClient::connect(&provider).await {
                         Ok(client) => return Ok((client, second_ip)),
@@ -180,7 +172,7 @@ impl NetworkDevice {
 }
 
 impl NetworkDevice {
-    pub(crate) fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
+    pub(crate) fn create_device_attached(&self) -> plist::Value {
         let mut network_address = [0u8; 128];
         match self.addr {
             IpAddr::V4(ipv4) => {
@@ -288,7 +280,7 @@ impl NetworkDevice {
             }
         }
 
-        Ok(plist_macro::plist!({
+        plist_macro::plist!({
             "DeviceID": self.core.id,
             "MessageType": "Attached",
             "Properties": {
@@ -298,8 +290,8 @@ impl NetworkDevice {
                 "EscapedFullServiceName": &self.service_name,
                 "InterfaceIndex": self.scope_id.unwrap_or(0),
                 "NetworkAddress": network_address.to_vec(),
-                "SerialNumber": &self.udid
+                "SerialNumber":? self.udid.as_deref()
             }
-        }))
+        })
     }
 }

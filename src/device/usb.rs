@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU16, Ordering},
+use std::{
+    borrow::Cow,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU16, Ordering},
+    },
 };
 
 use bytes::Bytes;
@@ -33,7 +36,7 @@ pub struct UsbDeviceShared {
     pub(crate) core: DeviceCore,
     pub(crate) router: Arc<PacketRouter>,
     writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
-    udid: String,
+    udid: Option<String>,
 }
 
 #[derive(Debug)]
@@ -65,10 +68,7 @@ impl UsbDevice {
         disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
     ) -> Result<Self, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
-        let udid = info
-            .udid()
-            .ok_or(RusbmuxError::InvalidData("USB device has no serial number"))?
-            .into_owned();
+        let udid = info.udid().map(Cow::into_owned);
         let device_handle = info.open().await?;
 
         let (mut end_in, mut end_out) = device_handle.endpoint().await?;
@@ -473,7 +473,7 @@ impl UsbDevice {
     }
 
     #[inline]
-    pub fn udid(&self) -> &str {
+    pub fn udid(&self) -> Option<&str> {
         self.shared.udid()
     }
 
@@ -503,7 +503,7 @@ impl Drop for UsbDevice {
 }
 
 impl UsbDevice {
-    pub fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
+    pub fn create_device_attached(&self) -> plist::Value {
         let location_id = self.location_id;
 
         let speed = self.speed.unwrap_or(0);
@@ -518,7 +518,7 @@ impl UsbDevice {
             "Adding device to plist"
         );
 
-        Ok(plist_macro::plist!({
+        plist_macro::plist!({
             "DeviceID": self.shared.core.id,
             "MessageType": "Attached",
             "Properties": {
@@ -527,15 +527,15 @@ impl UsbDevice {
                 "DeviceID": self.shared.core.id,
                 "LocationID": location_id,
                 "ProductID": self.product_id,
-                "SerialNumber": udid,
+                "SerialNumber":? udid.as_ref(),
             }
-        }))
+        })
     }
 }
 
 impl UsbDeviceShared {
-    pub fn udid(&self) -> &str {
-        &self.udid
+    pub fn udid(&self) -> Option<&str> {
+        self.udid.as_deref()
     }
 
     pub fn id(&self) -> u64 {

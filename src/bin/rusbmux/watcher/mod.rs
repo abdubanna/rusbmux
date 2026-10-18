@@ -72,7 +72,7 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     match device.connection_type() {
         // the removed device is a usb, and there's a network device with the same udid
         ConnectionType::Usb => {
-            if let Some(ndev_id) = crate::utils::find_network_id_by_udid(&device.udid()) {
+            if let Some(ndev_id) = crate::utils::find_network_id_by_udid(device.udid()) {
                 let _ = get_hotplug_event_tx()
                     .await
                     .send(DeviceEvent::Attached { id: ndev_id });
@@ -86,7 +86,7 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
         // the network device is also connected as usb, so skip sending the detached event
         //
         // because the network device is already detached from the listener (dedup purposes)
-        ConnectionType::Network if crate::utils::has_usb_with_udid(&device.udid()) => {}
+        ConnectionType::Network if crate::utils::has_usb_with_udid(device.udid()) => {}
 
         // the network device is not also connected as usb
         //

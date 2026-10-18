@@ -19,7 +19,11 @@ pub(super) fn spawn(device: UsbDeviceShared) {
 }
 
 async fn run(device: UsbDeviceShared) -> Result<(), RusbmuxError> {
-    let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", device.udid()));
+    let Some(udid) = device.udid() else {
+        return Err(RusbmuxError::InvalidData("UDID not found for device"));
+    };
+
+    let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", udid));
 
     let pairing_file = match tokio::fs::read(&path).await {
         Ok(data) => {

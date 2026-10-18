@@ -16,7 +16,7 @@ pub async fn devices_plist() -> Result<plist::Value, RusbmuxError> {
         .iter()
         .filter(|dev| !crate::utils::is_shadowed(dev))
     {
-        devices_plist.push(device.create_device_attached()?);
+        devices_plist.push(device.create_device_attached());
     }
 
     debug!(

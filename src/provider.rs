@@ -102,12 +102,12 @@ impl IdeviceProvider for RusbmuxProvider {
         let label = self.label.clone();
         let device = self.device.clone();
 
-        let udid = self.device.udid().to_string();
-
         Box::pin(async move {
+            let udid = device.udid().map(ToString::to_string);
+
             let (source_port, rx) = device.router.register().map_err(|err| {
                 IdeviceError::UnexpectedResponse(format!(
-                    "failed to connect to port {port} on {udid}: {err}"
+                    "failed to connect to port {port} on {udid:?}: {err}"
                 ))
             })?;
 
@@ -124,7 +124,7 @@ impl IdeviceProvider for RusbmuxProvider {
                 .await
                 .map_err(|err| {
                     IdeviceError::UnexpectedResponse(format!(
-                        "failed to connect to port {port} on {udid}: {err}"
+                        "failed to connect to port {port} on {udid:?}: {err}"
                     ))
                 })?;
 
@@ -160,7 +160,10 @@ impl IdeviceProvider for RusbmuxProvider {
             };
 
             let mut idevice = Idevice::new(Box::new(stream), label);
-            idevice.set_udid(udid);
+
+            if let Some(udid) = udid {
+                idevice.set_udid(udid);
+            }
 
             Ok(idevice)
         })

@@ -1,4 +1,4 @@
-use std::{net::IpAddr, path::Path, time::Duration};
+use std::{net::IpAddr, time::Duration};
 
 use idevice::{
     Idevice, IdeviceError, IdeviceService, pairing_file::PairingFile, provider::TcpProvider,
@@ -23,35 +23,40 @@ impl Drop for PowerAssertion {
 }
 
 impl PowerAssertion {
-    pub async fn new(
+    pub fn new(
         addr: IpAddr,
         scope_id: Option<u32>,
-        udid: &str,
-        lockdown_path: &Path,
+        pairing_file: PairingFile,
     ) -> Result<Self, RusbmuxError> {
-        let assertion = Assertion::new(addr, scope_id, udid, lockdown_path).await?;
-
-        info!(udid, "Holding a power assertion");
-
-        let udid = udid.to_string();
-        let lockdown_path = lockdown_path.to_path_buf();
+        // TODO: move it inside of the heartbeat; so it's one spawn
         let renewal_handler = tokio::spawn(async move {
-            let mut assertion = assertion;
+            let provider = TcpProvider {
+                addr,
+                scope_id,
+                label: "rusbmux_power_assertion".to_string(),
+                pairing_file,
+            };
+
+            let udid = provider.pairing_file.udid.as_deref();
+
+            info!(udid, "Holding a power assertion");
             loop {
-                tokio::time::sleep(RENEWAL_INTERVAL).await;
+                let mut assertion = match Assertion::connect(&provider).await {
+                    Ok(a) => a,
+                    Err(err) => {
+                        warn!(udid, %err, "Failed to renew the power assertion");
+                        return;
+                    }
+                };
 
-                let new_assertion =
-                    match Assertion::new(addr, scope_id, &udid, &lockdown_path).await {
-                        Ok(assertion) => assertion,
-                        Err(err) => {
-                            warn!(udid, %err, "Failed to renew the power assertion");
-                            return;
-                        }
-                    };
+                if let Err(err) = assertion.assert().await {
+                    warn!(udid, %err, "Failed to renew the power assertion");
+                    return;
+                }
 
-                drop(assertion);
-                assertion = new_assertion;
                 debug!(udid, "Renewed the power assertion");
+
+                tokio::time::sleep(RENEWAL_INTERVAL).await;
             }
         });
 
@@ -63,23 +68,8 @@ impl PowerAssertion {
 struct Assertion(Idevice);
 
 impl Assertion {
-    async fn new(
-        addr: IpAddr,
-        scope_id: Option<u32>,
-        udid: &str,
-        lockdown_path: &Path,
-    ) -> Result<Self, RusbmuxError> {
-        let provider = TcpProvider {
-            addr,
-            scope_id,
-            pairing_file: PairingFile::from_bytes(
-                &tokio::fs::read(lockdown_path.join(format!("{udid}.plist"))).await?,
-            )?,
-            label: format!("rusbmux_{udid}_power_assertion"),
-        };
-        let mut assertion = Self::connect(&provider).await?;
-
-        let reply = assertion
+    async fn assert(&mut self) -> Result<(), RusbmuxError> {
+        let reply = self
             .send_recv(plist_macro::plist!({
                 "CommandKey": "CommandCreateAssertion",
                 "AssertionTypeKey": "AMDPowerAssertionTypeWirelessSync",
@@ -93,7 +83,7 @@ impl Assertion {
             return Err(RusbmuxError::PowerAssertion(format!("{error:?}")));
         }
 
-        Ok(assertion)
+        Ok(())
     }
 
     async fn send_recv(

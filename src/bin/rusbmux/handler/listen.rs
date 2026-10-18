@@ -37,7 +37,7 @@ pub async fn handle_listen(client: &mut ConnectionStream, tag: u32) -> Result<()
                     continue;
                 };
 
-                let device_plist = device.create_device_attached()?;
+                let device_plist = device.create_device_attached();
 
                 let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
 
@@ -101,7 +101,7 @@ pub async fn send_currently_connected(
         .iter()
         .filter(|dev| !crate::utils::is_shadowed(dev))
     {
-        let device_plist = device.create_device_attached()?;
+        let device_plist = device.create_device_attached();
 
         let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
 

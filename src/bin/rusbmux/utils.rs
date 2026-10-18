@@ -25,30 +25,33 @@ pub fn is_disconnect(err: &RusbmuxError) -> bool {
     false
 }
 
-pub fn has_usb_with_udid(udid: &str) -> bool {
+pub fn has_usb_with_udid(udid: Option<&str>) -> bool {
     crate::watcher::CONNECTED_DEVICES
         .iter()
         .any(|d| d.as_usb().is_some_and(|u| u.udid() == udid))
 }
 
-pub fn has_network_with_udid(udid: &str) -> bool {
+pub fn has_network_with_udid(udid: Option<&str>) -> bool {
     crate::watcher::CONNECTED_DEVICES
         .iter()
-        .any(|d| d.as_network().is_some_and(|u| u.udid == udid))
+        .any(|d| d.as_network().is_some_and(|u| u.udid.as_deref() == udid))
 }
 
 /// should this device be hidden from clients? (network shadowed by USB)
 pub fn is_shadowed(dev: &Device) -> bool {
     match dev.as_network() {
-        Some(ndev) => has_usb_with_udid(&ndev.udid),
+        Some(ndev) => has_usb_with_udid(ndev.udid.as_deref()),
         None => false,
     }
 }
 
-pub fn find_network_id_by_udid(udid: &str) -> Option<u64> {
+pub fn find_network_id_by_udid(udid: Option<&str>) -> Option<u64> {
     crate::watcher::CONNECTED_DEVICES
         .iter()
-        .find(|dev| dev.as_network().is_some_and(|ndev| ndev.udid == udid))
+        .find(|dev| {
+            dev.as_network()
+                .is_some_and(|ndev| ndev.udid.as_deref() == udid)
+        })
         .map(|ndev| ndev.id())
 }
 
