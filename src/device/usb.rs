@@ -260,8 +260,6 @@ impl UsbDevice {
         info!(target: "device_writer", device_id, "Writer loop started");
 
         // starts at 1 because we sent the syn
-        //
-        // TODO: wrapping?
         let mut send_seq = 1;
 
         loop {
@@ -286,7 +284,7 @@ impl UsbDevice {
 
                 trace!(target: "device_writer", device_id, send_seq, recv_seq=recv_seq_, "Updating seq numbers");
 
-                send_seq += 1;
+                send_seq = send_seq.wrapping_add(1);
             }
 
             trace!(target: "device_writer", device_id, "Encoding headers");
