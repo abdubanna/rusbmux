@@ -3,64 +3,59 @@ use std::{net::IpAddr, time::Duration};
 use idevice::{
     Idevice, IdeviceError, IdeviceService, pairing_file::PairingFile, provider::TcpProvider,
 };
-use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::error::RusbmuxError;
 
 const ASSERTION_TIMEOUT: Duration = Duration::from_secs(20 * 60);
-const RENEWAL_INTERVAL: Duration = Duration::from_secs(10 * 60);
+pub const RENEWAL_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug)]
 pub struct PowerAssertion {
-    renewal_handler: JoinHandle<()>,
-}
-
-impl Drop for PowerAssertion {
-    fn drop(&mut self) {
-        self.renewal_handler.abort();
-    }
+    provider: TcpProvider,
+    assertion: Option<Assertion>,
 }
 
 impl PowerAssertion {
-    pub fn new(
-        addr: IpAddr,
-        scope_id: Option<u32>,
-        pairing_file: PairingFile,
-    ) -> Result<Self, RusbmuxError> {
-        // TODO: move it inside of the heartbeat; so it's one spawn
-        let renewal_handler = tokio::spawn(async move {
-            let provider = TcpProvider {
+    pub fn new(addr: IpAddr, scope_id: Option<u32>, pairing_file: PairingFile) -> Self {
+        Self {
+            provider: TcpProvider {
                 addr,
                 scope_id,
                 label: "rusbmux_power_assertion".to_string(),
                 pairing_file,
-            };
+            },
+            assertion: None,
+        }
+    }
 
-            let udid = provider.pairing_file.udid.as_deref();
+    /// (re)connects the assertion channel; returns false if it had to give up, in which case
+    /// the caller should stop asking (a device that refuses assertions is unreachable anyway)
+    pub async fn renew(&mut self) -> bool {
+        let udid = self.provider.pairing_file.udid.as_deref();
 
-            info!(udid, "Holding a power assertion");
-            loop {
-                let mut assertion = match Assertion::connect(&provider).await {
-                    Ok(a) => a,
-                    Err(err) => {
-                        warn!(udid, %err, "Failed to renew the power assertion");
-                        return;
-                    }
-                };
-
-                if let Err(err) = assertion.assert().await {
-                    warn!(udid, %err, "Failed to renew the power assertion");
-                    return;
-                }
-
-                debug!(udid, "Renewed the power assertion");
-
-                tokio::time::sleep(RENEWAL_INTERVAL).await;
+        let mut assertion = match Assertion::connect(&self.provider).await {
+            Ok(assertion) => assertion,
+            Err(err) => {
+                warn!(udid, %err, "Failed to connect to the power assertion service");
+                self.assertion = None;
+                return false;
             }
-        });
+        };
 
-        Ok(Self { renewal_handler })
+        match assertion.assert().await {
+            Ok(()) => {
+                debug!(udid, "Renewed the power assertion");
+                // so it won't drop the connection
+                self.assertion = Some(assertion);
+                true
+            }
+            Err(err) => {
+                warn!(udid, %err, "Failed to renew the power assertion");
+                self.assertion = None;
+                true
+            }
+        }
     }
 }
 

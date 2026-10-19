@@ -9,7 +9,10 @@ use tracing::{debug, warn};
 
 use crate::{
     conn::NetworkDeviceConn,
-    device::{core::DeviceCore, power_assertion::PowerAssertion},
+    device::{
+        core::DeviceCore,
+        power_assertion::{PowerAssertion, RENEWAL_INTERVAL},
+    },
     error::RusbmuxError,
 };
 
@@ -28,7 +31,6 @@ pub struct NetworkDevice {
     pub udid: Option<String>,
 
     hb_handler: JoinHandle<()>,
-    _power_assertion: PowerAssertion,
 }
 
 impl Drop for NetworkDevice {
@@ -50,18 +52,40 @@ impl NetworkDevice {
         let udid = pairing_file.udid.clone();
         let mac_address = pairing_file.wifi_mac_address.clone();
 
-        let (mut heartbeat_client, addr) =
+        let (heartbeat_client, addr) =
             Self::connect_heartbeat_client(addr, scope_id, pairing_file.clone()).await?;
-        let power_assertion = PowerAssertion::new(addr, scope_id, pairing_file)?;
+
+        let power_assertion = PowerAssertion::new(addr, scope_id, pairing_file);
 
         let core = DeviceCore::new(id);
 
         let device_shutdown = core.canceler.clone();
-        let hb_handler = tokio::spawn(async move {
+
+        let hb_handler =
+            Self::spawn_heartbeat(heartbeat_client, power_assertion, device_shutdown, id);
+
+        Ok(Self {
+            core,
+            addr,
+            scope_id,
+            mac_address,
+            service_name,
+            udid,
+            hb_handler,
+        })
+    }
+
+    fn spawn_heartbeat(
+        mut heartbeat_client: HeartbeatClient,
+        mut power_assertion: PowerAssertion,
+        device_shutdown: CancellationToken,
+        id: u64,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
             let mut interval = 15;
 
             let mut failed = false;
-
+            let mut next_assertion = tokio::time::Instant::now();
             loop {
                 interval = match heartbeat_client.get_marco(interval).await {
                     Ok(i) => {
@@ -91,18 +115,16 @@ impl NetworkDevice {
                     warn!(id, "Heartbeat failed, error: {err}, retrying");
                     failed = true;
                 }
-            }
-        });
 
-        Ok(Self {
-            core,
-            addr,
-            scope_id,
-            mac_address,
-            service_name,
-            udid,
-            hb_handler,
-            _power_assertion: power_assertion,
+                if tokio::time::Instant::now() >= next_assertion {
+                    if !power_assertion.renew().await {
+                        device_shutdown.cancel();
+                        return;
+                    }
+
+                    next_assertion = tokio::time::Instant::now() + RENEWAL_INTERVAL;
+                }
+            }
         })
     }
 
