@@ -20,7 +20,6 @@ use crate::{
     error::{ParseError, RusbmuxError},
     parser::device_mux::{
         UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2, UsbDevicePacketPayload,
-        UsbDevicePacketVersion,
     },
     usb_backend::{AnyDeviceHandle, AnyDeviceInfo, AnyEndpointReader, AnyEndpointWriter},
 };
@@ -47,9 +46,6 @@ pub struct UsbDevice {
     speed: Option<u64>,
     location_id: u32,
     product_id: u16,
-
-    // TODO: drop it if unnecessary
-    _version: UsbDevicePacketVersion,
 
     reader_loop_handler: JoinHandle<()>,
     writer_loop_handler: JoinHandle<()>,
@@ -160,7 +156,6 @@ impl UsbDevice {
             speed: info.speed(),
             location_id: info.location_id(),
             product_id: info.product_id(),
-            _version: version,
             reader_loop_handler,
             writer_loop_handler,
             dropped: AtomicBool::new(false),
