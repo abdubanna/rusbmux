@@ -192,8 +192,6 @@ impl UsbDevice {
 
                     // clearing the router drops the tx of the connection
                     // thus waking up the rx with an error
-                    //
-                    // TODO: test that the connections gets removed
                     router.clear();
                     break;
                 }

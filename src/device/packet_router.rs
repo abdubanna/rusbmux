@@ -154,3 +154,56 @@ impl PacketRouter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn clear_removes_every_route_and_wakes_receivers() {
+        let router = PacketRouter::new();
+
+        let (_port, rx) = router.register().expect("register");
+        assert_eq!(router.routes.len(), 1);
+
+        // simulate a connection waiting for a response
+        let recv_handle = tokio::spawn(async move { rx.recv().await });
+
+        // this is what `UsbDevice::start_reader_loop` does on an IO failure
+        router.clear();
+
+        assert!(router.routes.is_empty());
+
+        // every sender is gone, so the readers must be woken with an error instead of
+        // hanging forever
+        assert!(recv_handle.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn unregister_only_touches_one_route() {
+        let router = PacketRouter::new();
+        let (port, rx) = router.register().unwrap();
+        let (_port2, _rx2) = router.register().unwrap();
+
+        assert!(router.unregister(port).is_some());
+        assert_eq!(router.routes.len(), 1);
+
+        assert!(router.unregister(port).is_none());
+
+        // the entry (and its tx) is gone, so the reader is released
+        assert!(rx.0.recv().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cleanup_dead_drops_entries_whose_receiver_is_gone() {
+        let router = PacketRouter::new();
+        let (port, rx) = router.register().unwrap();
+        let (_port2, _rx2) = router.register().unwrap();
+        assert_eq!(router.routes.len(), 2);
+
+        drop(rx); // simulate the client side dropping the connection
+
+        router.cleanup_dead();
+        assert!(!router.routes.contains_key(&port));
+    }
+}
