@@ -10,7 +10,7 @@ use idevice::{Idevice, IdeviceError, pairing_file::PairingFile, provider::Idevic
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
-    conn::{TcpHandshake, UsbDeviceConn},
+    conn::{ConnState, UsbDeviceConn},
     device::{
         packet_router::SAsyncPacketRx,
         usb::{UsbDevice, UsbDeviceShared},
@@ -120,7 +120,7 @@ impl IdeviceProvider for RusbmuxProvider {
 
             let tx = device.get_writer();
 
-            let handshake = TcpHandshake::perform(source_port, port, &rx, &tx)
+            let conn_state = ConnState::perform_handshake(source_port, port, &rx, &tx)
                 .await
                 .map_err(|err| {
                     IdeviceError::UnexpectedResponse(format!(
@@ -135,10 +135,7 @@ impl IdeviceProvider for RusbmuxProvider {
                     &device.core,
                     port,
                     source_port,
-                    handshake.sent_bytes,
-                    handshake.received_bytes,
-                    handshake.device_window_size,
-                    handshake.device_received_bytes,
+                    conn_state,
                     SAsyncPacketRx(dummy_rx),
                     tx,
                 )

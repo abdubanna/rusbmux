@@ -5,7 +5,7 @@ mod usb;
 
 use crate::{device::ConnectionType, error::RusbmuxError};
 pub use network::NetworkDeviceConn;
-pub(crate) use usb::TcpHandshake;
+pub(crate) use usb::ConnState;
 pub use usb::UsbDeviceConn;
 
 pub enum DeviceConn {
