@@ -44,7 +44,7 @@ body = """
 {% endfor %}
 
 {% set other_commits = commits
-    | filter(attribute="group", value="<!-- 11 -->Other Commits") %}
+    | filter(attribute="group", value="<!-- 09 -->Other Commits") %}
 
 {% if other_commits | length > 0 %}
   <details>
@@ -103,11 +103,12 @@ commit_parsers = [
   { message = "^fix", group = "<!-- 01 -->Bug Fixes" },
   { message = "^docs?", group = "<!-- 02 -->Documentation" },
   { message = "^perf", group = "<!-- 03 -->Performance" },
-  { message = "^test", group = "<!-- 04 -->Testing" },
-  { message = "^ci", group = "<!-- 05 -->Continuous Integration" },
-  { message = "^revert", group = "<!-- 06 -->Reverts" },
-  { message = "^chore", group = "<!-- 07 -->Miscellaneous Tasks" },
-  { message = ".*", group = "<!-- 08 -->Other Commits" },
+  { message = "^refactor", group = "<!-- 04 -->Refactoring" },
+  { message = "^test", group = "<!-- 05 -->Testing" },
+  { message = "^ci", group = "<!-- 06 -->Continuous Integration" },
+  { message = "^revert", group = "<!-- 07 -->Reverts" },
+  { message = "^chore", group = "<!-- 08 -->Miscellaneous Tasks" },
+  { message = ".*", group = "<!-- 09 -->Other Commits" },
 ]
 topo_order_commits = true
 sort_commits = "newest"
