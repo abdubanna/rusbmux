@@ -1,7 +1,8 @@
 use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 
 use idevice::{
-    IdeviceService, heartbeat::HeartbeatClient, pairing_file::PairingFile, provider::TcpProvider,
+    HeartbeatError, IdeviceError, IdeviceService, heartbeat::HeartbeatClient,
+    pairing_file::PairingFile, provider::TcpProvider,
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -92,7 +93,16 @@ impl NetworkDevice {
                         failed = false;
                         i + 5
                     }
-                    // TODO: break if it's a socket error
+
+                    Err(
+                        err @ (IdeviceError::Socket(_)
+                        | IdeviceError::Heartbeat(HeartbeatError::SleepyTime)),
+                    ) => {
+                        warn!(id, "Heartbeat failed, error: {err}, closing device");
+                        device_shutdown.cancel();
+                        return;
+                    }
+
                     Err(err) => {
                         if failed {
                             warn!(id, "Heartbeat failed, error: {err}, closing device");
@@ -105,15 +115,29 @@ impl NetworkDevice {
                         interval
                     }
                 };
-                if let Err(err) = heartbeat_client.send_polo().await {
-                    if failed {
+
+                match heartbeat_client.send_polo().await {
+                    Ok(()) => {}
+
+                    Err(
+                        err @ (IdeviceError::Socket(_)
+                        | IdeviceError::Heartbeat(HeartbeatError::SleepyTime)),
+                    ) => {
                         warn!(id, "Heartbeat failed, error: {err}, closing device");
                         device_shutdown.cancel();
                         return;
                     }
 
-                    warn!(id, "Heartbeat failed, error: {err}, retrying");
-                    failed = true;
+                    Err(err) => {
+                        if failed {
+                            warn!(id, "Heartbeat failed, error: {err}, closing device");
+                            device_shutdown.cancel();
+                            return;
+                        }
+
+                        warn!(id, "Heartbeat failed, error: {err}, retrying");
+                        failed = true;
+                    }
                 }
 
                 if tokio::time::Instant::now() >= next_assertion {
