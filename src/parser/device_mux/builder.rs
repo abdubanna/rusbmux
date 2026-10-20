@@ -19,6 +19,11 @@ bitflags! {
     }
 }
 
+/// a place holder value,
+///
+/// it would be rewritten by the writer loop to avoid the race condition on the seq
+pub const AUTO_SEQ: u16 = 0;
+
 pub struct Empty;
 
 #[derive(Clone)]

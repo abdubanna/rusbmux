@@ -4,7 +4,7 @@ use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
 
 mod builder;
-pub use builder::{TcpFlags, UsbDevicePacketBuilder};
+pub use builder::{AUTO_SEQ, TcpFlags, UsbDevicePacketBuilder};
 
 use crate::{error::ParseError, usb_backend::AnyEndpointReader};
 

@@ -1,25 +1,23 @@
 use bytes::Bytes;
 use crossfire::{MAsyncTx, mpsc};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace};
 
 use crate::{
     device::{core::DeviceCore, packet_router::SAsyncPacketRx, usb::UsbDevice},
     error::RusbmuxError,
-    parser::device_mux::{TcpFlags, UsbDevicePacket},
+    parser::device_mux::{AUTO_SEQ, TcpFlags, UsbDevicePacket},
     usb_backend::MAX_PACKET_PAYLOAD_SIZE,
 };
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering},
-};
+use std::sync::atomic::AtomicBool;
 
 #[derive(Debug)]
 pub struct ConnState {
-    pub sent_bytes: AtomicU32,
-    pub received_bytes: AtomicU32,
-    pub device_window_size: AtomicU16,
-    pub device_received_bytes: AtomicU32,
+    pub sent_bytes: u32,
+    pub received_bytes: u32,
+    pub device_window_size: u16,
+    pub device_received_bytes: u32,
 }
 
 impl ConnState {
@@ -111,23 +109,19 @@ impl ConnState {
         );
 
         Ok(Self {
-            sent_bytes: sent_bytes.into(),
-            received_bytes: received_bytes.into(),
-            device_window_size: tcp_syn_ack_tcp_hdr.window_size.into(),
-            device_received_bytes: tcp_syn_ack_tcp_hdr.acknowledgment_number.into(),
+            sent_bytes,
+            received_bytes,
+            device_window_size: tcp_syn_ack_tcp_hdr.window_size,
+            device_received_bytes: tcp_syn_ack_tcp_hdr.acknowledgment_number,
         })
     }
 
     pub fn calc_sendable_bytes(&self) -> usize {
-        let device_window_size = self.device_window_size.load(Ordering::Relaxed);
-        let sent_bytes = self.sent_bytes.load(Ordering::Relaxed);
-        let device_received_bytes = self.device_received_bytes.load(Ordering::Relaxed);
-
         // the device right shifts the window size (so are we), so put it back to get the actual
         // value
-        let device_window_size = (device_window_size as u32) << 8;
+        let device_window_size = (self.device_window_size as u32) << 8;
 
-        let unacked_bytes = sent_bytes.wrapping_sub(device_received_bytes);
+        let unacked_bytes = self.sent_bytes.wrapping_sub(self.device_received_bytes);
 
         if device_window_size > unacked_bytes {
             ((device_window_size - unacked_bytes) as usize).min(MAX_PACKET_PAYLOAD_SIZE)
@@ -143,7 +137,7 @@ pub struct UsbDeviceConn {
     source_port: u16,
     destination_port: u16,
 
-    sendable_bytes: AtomicUsize,
+    sendable_bytes: usize,
 
     conn_state: ConnState,
     rx: SAsyncPacketRx,
@@ -151,11 +145,6 @@ pub struct UsbDeviceConn {
 
     dropped: AtomicBool,
 }
-
-/// a place holder value,
-///
-/// it would be rewritten by the writer loop to avoid the race condition on the seq
-const AUTO_SEQ: u16 = 0;
 
 impl UsbDeviceConn {
     pub(crate) const WINDOW_SIZE: u16 = ((128u32 * 1024) >> 8) as u16;
@@ -171,11 +160,35 @@ impl UsbDeviceConn {
         conn_state: ConnState,
         rx: SAsyncPacketRx,
         tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
-    ) -> Arc<Self> {
-        let sendable_bytes = AtomicUsize::new(conn_state.calc_sendable_bytes());
+    ) -> Self {
+        let sendable_bytes = conn_state.calc_sendable_bytes();
 
-        Arc::new(Self {
+        Self {
             device_core: device_core.clone(),
+            source_port,
+            destination_port,
+            sendable_bytes,
+            conn_state,
+            rx,
+            tx,
+            dropped: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) async fn new(
+        device: &UsbDevice,
+        source_port: u16,
+        destination_port: u16,
+        rx: SAsyncPacketRx,
+        tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+    ) -> Result<Self, RusbmuxError> {
+        let conn_state =
+            ConnState::perform_handshake(source_port, destination_port, &rx, &tx).await?;
+
+        let sendable_bytes = conn_state.calc_sendable_bytes();
+
+        Ok(Self {
+            device_core: device.core(),
             source_port,
             destination_port,
             sendable_bytes,
@@ -186,45 +199,21 @@ impl UsbDeviceConn {
         })
     }
 
-    pub(crate) async fn new(
-        device: &UsbDevice,
-        source_port: u16,
-        destination_port: u16,
-        rx: SAsyncPacketRx,
-        tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
-    ) -> Result<Arc<Self>, RusbmuxError> {
-        let conn_state =
-            ConnState::perform_handshake(source_port, destination_port, &rx, &tx).await?;
-
-        let sendable_bytes = conn_state.calc_sendable_bytes();
-
-        Ok(Arc::new(Self {
-            device_core: device.core(),
-            source_port,
-            destination_port,
-            sendable_bytes: AtomicUsize::new(sendable_bytes),
-            conn_state,
-            rx,
-            tx,
-            dropped: AtomicBool::new(false),
-        }))
-    }
-
     /// you must include the length prefix at the start
-    pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
+    pub async fn send_bytes(&mut self, value: Bytes) -> Result<(), RusbmuxError> {
         let packet = self.build_bytes(value);
 
         self.send_packet(packet).await
     }
 
-    pub async fn send_plist(&self, value: plist::Value) -> Result<(), RusbmuxError> {
+    pub async fn send_plist(&mut self, value: plist::Value) -> Result<(), RusbmuxError> {
         let packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
                 self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
+                self.conn_state.sent_bytes,
+                self.conn_state.received_bytes,
                 TcpFlags::ACK,
             )
             .payload_plist(value)
@@ -233,7 +222,7 @@ impl UsbDeviceConn {
         self.send_packet(packet).await
     }
 
-    async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
+    async fn send_packet(&mut self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
         let payload_len = packet.payload.len() as u32;
 
         self.tx.send(packet).await?;
@@ -252,7 +241,7 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub async fn close(&self) -> Result<(), RusbmuxError> {
+    pub async fn close(&mut self) -> Result<(), RusbmuxError> {
         self.send_rst().await?;
         unsafe { self.set_dropped() };
 
@@ -266,23 +255,14 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub(crate) fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
+    pub(crate) fn send_rst_blocking(&mut self) -> Result<(), RusbmuxError> {
         debug!(
             source_port = self.source_port,
             destination_port = self.destination_port,
             "Closing connection"
         );
 
-        let rst_packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::RST,
-            )
-            .build();
+        let rst_packet = self.build_flag(TcpFlags::RST);
 
         self.tx.try_send(rst_packet)?;
 
@@ -294,23 +274,14 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub(crate) async fn send_rst(&self) -> Result<(), RusbmuxError> {
+    pub async fn send_rst(&mut self) -> Result<(), RusbmuxError> {
         debug!(
             source_port = self.source_port,
             destination_port = self.destination_port,
             "Closing connection"
         );
 
-        let rst_packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::RST,
-            )
-            .build();
+        let rst_packet = self.build_flag(TcpFlags::RST);
 
         self.tx.send(rst_packet).await?;
 
@@ -322,7 +293,7 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    async fn ack(&self) -> Result<(), RusbmuxError> {
+    async fn ack(&mut self) -> Result<(), RusbmuxError> {
         let tcp_ack = self.build_flag(TcpFlags::ACK);
 
         self.tx.send(tcp_ack).await?;
@@ -337,7 +308,7 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    pub async fn recv(&self) -> Result<UsbDevicePacket, RusbmuxError> {
+    pub async fn recv(&mut self) -> Result<UsbDevicePacket, RusbmuxError> {
         let response = self.rx.recv().await?;
 
         self.update_states(&response);
@@ -356,8 +327,8 @@ impl UsbDeviceConn {
             .tcp_header(
                 self.source_port,
                 self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
+                self.conn_state.sent_bytes,
+                self.conn_state.received_bytes,
                 TcpFlags::ACK,
             )
             .payload_bytes(value)
@@ -372,142 +343,53 @@ impl UsbDeviceConn {
             .tcp_header(
                 self.source_port,
                 self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
+                self.conn_state.sent_bytes,
+                self.conn_state.received_bytes,
                 tcp_flag,
             )
             .build()
     }
 
-    pub(crate) fn update_states(&self, packet: &UsbDevicePacket) {
+    pub(crate) fn update_states(&mut self, packet: &UsbDevicePacket) {
         let recv_bytes = packet.payload.len() as u32;
 
         if let Some(ref tcp_hdr) = packet.tcp_hdr {
-            self.set_received_bytes(tcp_hdr.sequence_number.wrapping_add(recv_bytes));
+            self.conn_state.received_bytes = tcp_hdr.sequence_number.wrapping_add(recv_bytes);
 
-            self.set_device_last_received_bytes(tcp_hdr.acknowledgment_number);
-            self.set_device_last_window_size(tcp_hdr.window_size);
+            self.conn_state.device_received_bytes = tcp_hdr.acknowledgment_number;
+            self.conn_state.device_window_size = tcp_hdr.window_size;
         }
     }
 
-    pub(crate) fn update_sendable_bytes(&self) {
-        let sendable = Self::calc_sendable_bytes(
-            self.get_sent_bytes(),
-            self.get_device_last_window_size(),
-            self.get_device_last_received_bytes(),
-        );
+    pub(crate) fn update_sendable_bytes(&mut self) {
+        let sendable = self.conn_state.calc_sendable_bytes();
 
-        self.set_sendable_bytes(sendable);
+        self.sendable_bytes = sendable;
 
         trace!("new sendable amount of bytes: {sendable}",);
     }
 
-    fn calc_sendable_bytes(
-        sent_bytes: u32,
-        device_window_size: u16,
-        device_received_bytes: u32,
-    ) -> usize {
-        // the device right shifts the window size (so are we), so put it back to get the actual
-        // value
-        let device_window_size = (device_window_size as u32) << 8;
-
-        let unacked_bytes = sent_bytes.wrapping_sub(device_received_bytes);
-
-        if device_window_size > unacked_bytes {
-            ((device_window_size - unacked_bytes) as usize).min(MAX_PACKET_PAYLOAD_SIZE)
-        } else {
-            0
-        }
-    }
-
-    pub async fn wait_shutdown(&self) -> Result<(), RusbmuxError> {
+    pub async fn wait_shutdown(&self) {
         self.device_core.canceler.cancelled().await;
-        Ok(())
     }
 }
 
 // atomic setters and getters
 impl UsbDeviceConn {
     #[inline]
-    fn get_sent_bytes(&self) -> u32 {
-        self.conn_state
-            .sent_bytes
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    fn get_received_bytes(&self) -> u32 {
-        self.conn_state
-            .received_bytes
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
     pub fn get_sendable_bytes(&self) -> usize {
         self.sendable_bytes
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[inline]
-    fn set_sendable_bytes(&self, value: usize) {
-        self.sendable_bytes
-            .store(value, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[inline]
-    fn get_device_last_window_size(&self) -> u16 {
-        self.conn_state
-            .device_window_size
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    fn set_device_last_window_size(&self, value: u16) {
-        self.conn_state
-            .device_window_size
-            .store(value, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[inline]
-    fn get_device_last_received_bytes(&self) -> u32 {
-        self.conn_state
-            .device_received_bytes
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    fn set_device_last_received_bytes(&self, value: u32) {
-        self.conn_state
-            .device_received_bytes
-            .store(value, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[inline]
-    fn set_received_bytes(&self, value: u32) {
-        self.conn_state
-            .received_bytes
-            .store(value, std::sync::atomic::Ordering::Relaxed);
+    pub(crate) fn add_sent_bytes(&mut self, value: u32) {
+        self.conn_state.sent_bytes = self.conn_state.sent_bytes.wrapping_add(value);
 
         trace!(
             source_port = self.source_port,
             destination_port = self.destination_port,
             bytes = value,
-            total = self.get_received_bytes(),
-            "Updated received bytes"
-        );
-    }
-
-    #[inline]
-    pub(crate) fn add_sent_bytes(&self, value: u32) {
-        self.conn_state
-            .sent_bytes
-            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
-
-        trace!(
-            source_port = self.source_port,
-            destination_port = self.destination_port,
-            bytes = value,
-            total = self.get_sent_bytes(),
+            total = self.conn_state.sent_bytes,
             "Updated sent bytes"
         );
     }
@@ -545,6 +427,11 @@ impl UsbDeviceConn {
     #[inline]
     pub fn get_tx(&self) -> MAsyncTx<crossfire::mpsc::Array<UsbDevicePacket>> {
         self.tx.clone()
+    }
+
+    #[inline]
+    pub fn device_canceler(&self) -> CancellationToken {
+        self.device_core.canceler.clone()
     }
 }
 

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use rusbmux::{
     conn::{DeviceConn, NetworkDeviceConn, UsbDeviceConn},
     error::RusbmuxError,
@@ -87,7 +85,7 @@ pub async fn handle_network_device_connect(
 
 pub async fn handle_usb_device_connect(
     client: &mut ConnectionStream,
-    conn: Arc<UsbDeviceConn>,
+    mut conn: UsbDeviceConn,
 ) -> Result<(), RusbmuxError> {
     let device_id = conn.device_id();
     let destination_port = conn.destination_port();
@@ -95,9 +93,11 @@ pub async fn handle_usb_device_connect(
     let mut read_buf = BytesMut::with_capacity(CLIENT_BUFF_SIZE);
     let (mut client_reader, mut client_writer) = client.split();
 
+    let device_canceler = conn.device_canceler();
     loop {
+        let sendable_bytes = conn.get_sendable_bytes();
         tokio::select! {
-            _ = conn.wait_shutdown() => {
+            _ = device_canceler.cancelled() => {
                 debug!(device_id, destination_port, "Device is shutting down");
                 return Ok(());
             }
@@ -109,8 +109,8 @@ pub async fn handle_usb_device_connect(
                 client_send(&mut client_writer, packet.payload.encode()).await?;
             }
 
-            client_packet = client_read(&mut client_reader, &mut read_buf, conn.get_sendable_bytes()),
-                            if conn.get_sendable_bytes() > 0
+            client_packet = client_read(&mut client_reader, &mut read_buf, sendable_bytes),
+                            if sendable_bytes > 0
             => {
                 let client_packet = client_packet?;
 

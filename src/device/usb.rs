@@ -19,7 +19,8 @@ use crate::{
     device::{core::DeviceCore, packet_router::PacketRouter},
     error::{ParseError, RusbmuxError},
     parser::device_mux::{
-        UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2, UsbDevicePacketPayload,
+        AUTO_SEQ, TcpFlags, UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2,
+        UsbDevicePacketPayload,
     },
     usb_backend::{AnyDeviceHandle, AnyDeviceInfo, AnyEndpointReader, AnyEndpointWriter},
 };
@@ -335,8 +336,8 @@ impl UsbDevice {
         }
     }
 
-    pub async fn connect(&self, destination_port: u16) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
-        let (source_port, rx) = self.shared.router.register()?;
+    pub async fn connect(&self, destination_port: u16) -> Result<UsbDeviceConn, RusbmuxError> {
+        let (source_port, rx) = self.shared.router.register(destination_port)?;
 
         debug!(
             device_id = self.shared.core.id,
@@ -359,58 +360,61 @@ impl UsbDevice {
             }
         };
 
-        self.shared
-            .router
-            .attach_conn(source_port, Arc::downgrade(&Arc::clone(&conn)));
-
         Ok(conn)
-    }
-
-    pub async fn cleanup_conn(&self, conn: &UsbDeviceConn) -> Result<(), RusbmuxError> {
-        let source_port = conn.source_port();
-
-        if let Some(pe) = self.shared.router.unregister(source_port)
-            && let Some(conn) = pe.conn.and_then(|conn| conn.upgrade())
-            && !conn.dropped()
-        {
-            conn.close().await?;
-        }
-
-        Ok(())
     }
 
     pub async fn close_all(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.shared.core.id, "Closing all connections");
 
-        let mut first_err = None;
-        for conn in self.shared.router.take_all_conns() {
-            if let Some(conn) = conn
-                && let Err(err) = conn.send_rst().await
-            {
-                first_err.get_or_insert(err);
-            }
+        for conn_entry in self.shared.router.take_all_alive_entries() {
+            let rst_packet = UsbDevicePacket::builder()
+                .header_tcp(AUTO_SEQ, AUTO_SEQ)
+                .tcp_header(
+                    conn_entry.source_port,
+                    conn_entry.destination_port,
+                    // apparently you can reset the connection with just the src and dst port
+                    //
+                    // I've already tested this, and yeah I can't send nor recv on the connection aftward,
+                    // and the device returns "\x01handleMuxTCPInput no matching session" once doing so
+                    //
+                    // NOTE: this was only tested on my device, maybe that's not the case on
+                    // different newer/older devices?
+                    0,
+                    0,
+                    TcpFlags::RST,
+                )
+                .build();
+
+            // only fails if the receiver is gone, which means the loop is gone
+            self.shared.writer_tx.send(rst_packet).await?;
         }
 
-        match first_err {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     pub fn close_all_blocking(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.shared.core.id, "Closing all connections");
 
         let mut first_err = None;
-        for conn in self.shared.router.take_all_conns() {
-            if let Some(conn) = conn
-                && let Err(err) = conn.send_rst_blocking()
-            {
+        for conn_entry in self.shared.router.take_all_alive_entries() {
+            let rst_packet = UsbDevicePacket::builder()
+                .header_tcp(AUTO_SEQ, AUTO_SEQ)
+                .tcp_header(
+                    conn_entry.source_port,
+                    conn_entry.destination_port,
+                    0,
+                    0,
+                    TcpFlags::RST,
+                )
+                .build();
+
+            if let Err(err) = self.shared.writer_tx.try_send(rst_packet) {
                 first_err.get_or_insert(err);
             }
         }
 
         match first_err {
-            Some(err) => Err(err),
+            Some(err) => Err(err.into()),
             None => Ok(()),
         }
     }

@@ -49,6 +49,7 @@ pub fn watch_usb(
                             let opaque_id = device_info.opaque_id();
                             let device = match Device::new_usb_with_disconnect_tx(device_info, id, Some(disconnected_tx.clone())).await {
                                 Ok(device) => Ok(device),
+                                // TODO: break if interface is busy
                                 Err(first_error) => {
                                     let deadline = Instant::now() + Duration::from_secs(3);
 

@@ -1,16 +1,13 @@
 use std::{
     ops::Deref,
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicU16, Ordering},
-    },
+    sync::atomic::{AtomicU16, Ordering},
 };
 
 use crossfire::{AsyncRx, AsyncTx, spsc};
 use dashmap::DashMap;
 use tracing::{debug, trace, warn};
 
-use crate::{conn::UsbDeviceConn, error::RusbmuxError, parser::device_mux::UsbDevicePacket};
+use crate::{error::RusbmuxError, parser::device_mux::UsbDevicePacket};
 
 #[derive(Debug)]
 pub struct SAsyncPacketTx(AsyncTx<spsc::Array<UsbDevicePacket>>);
@@ -42,8 +39,10 @@ type SourcePort = u16;
 #[derive(Debug)]
 pub struct PacketEntry {
     tx: SAsyncPacketTx,
-    /// bookkeeping for `close_all`; weak, so it never keeps a conn alive
-    pub conn: Option<Weak<UsbDeviceConn>>,
+
+    // used to close the connection in `close_all`
+    pub source_port: u16,
+    pub destination_port: u16,
 }
 
 #[derive(Debug)]
@@ -80,35 +79,33 @@ impl PacketRouter {
         });
     }
 
-    pub fn take_all_conns(&self) -> Vec<Option<Arc<UsbDeviceConn>>> {
+    pub fn take_all_alive_entries(&self) -> impl Iterator<Item = PacketEntry> {
         self.routes
             .iter()
             .map(|entry| *entry.key())
             .collect::<Vec<_>>()
             .into_iter()
             .filter_map(|key| self.routes.remove(&key))
-            .map(|(_, entry)| entry.conn)
-            .filter_map(|conn| conn.map(|c| c.upgrade()))
-            .collect()
+            .map(|(_, entry)| entry)
+            .filter(|entry| !entry.tx.is_disconnected())
     }
 
-    pub fn attach_conn(&self, source_port: u16, conn: Weak<UsbDeviceConn>) {
-        if let Some(mut pe) = self.routes.get_mut(&source_port) {
-            pe.conn = Some(conn)
-        }
-    }
-
-    pub fn register(&self) -> Result<(SourcePort, SAsyncPacketRx), RusbmuxError> {
+    pub fn register(
+        &self,
+        destination_port: u16,
+    ) -> Result<(SourcePort, SAsyncPacketRx), RusbmuxError> {
         self.cleanup_dead();
 
         for _ in 0..Self::MAX_SOURCE_PORT_PROBES {
             let sp = self.next_source_port.fetch_add(1, Ordering::Relaxed);
             let sp = if sp == 0 { 1 } else { sp };
+
             if let dashmap::Entry::Vacant(v) = self.routes.entry(sp) {
                 let (tx, rx) = spsc::bounded_async(256);
                 v.insert(PacketEntry {
                     tx: SAsyncPacketTx(tx),
-                    conn: None,
+                    source_port: sp,
+                    destination_port,
                 });
 
                 debug!(port = sp, "Connection registered");
@@ -163,7 +160,7 @@ mod tests {
     async fn clear_removes_every_route_and_wakes_receivers() {
         let router = PacketRouter::new();
 
-        let (_port, rx) = router.register().expect("register");
+        let (_port, rx) = router.register(1).expect("register");
         assert_eq!(router.routes.len(), 1);
 
         // simulate a connection waiting for a response
@@ -182,8 +179,8 @@ mod tests {
     #[tokio::test]
     async fn unregister_only_touches_one_route() {
         let router = PacketRouter::new();
-        let (port, rx) = router.register().unwrap();
-        let (_port2, _rx2) = router.register().unwrap();
+        let (port, rx) = router.register(1).unwrap();
+        let (_port2, _rx2) = router.register(1).unwrap();
 
         assert!(router.unregister(port).is_some());
         assert_eq!(router.routes.len(), 1);
@@ -197,8 +194,8 @@ mod tests {
     #[tokio::test]
     async fn cleanup_dead_drops_entries_whose_receiver_is_gone() {
         let router = PacketRouter::new();
-        let (port, rx) = router.register().unwrap();
-        let (_port2, _rx2) = router.register().unwrap();
+        let (port, rx) = router.register(1).unwrap();
+        let (_port2, _rx2) = router.register(1).unwrap();
         assert_eq!(router.routes.len(), 2);
 
         drop(rx); // simulate the client side dropping the connection

@@ -1,6 +1,5 @@
 use std::{
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -105,7 +104,7 @@ impl IdeviceProvider for RusbmuxProvider {
         Box::pin(async move {
             let udid = device.udid().map(ToString::to_string);
 
-            let (source_port, rx) = device.router.register().map_err(|err| {
+            let (source_port, rx) = device.router.register(port).map_err(|err| {
                 IdeviceError::UnexpectedResponse(format!(
                     "failed to connect to port {port} on {udid:?}: {err}"
                 ))
@@ -141,10 +140,6 @@ impl IdeviceProvider for RusbmuxProvider {
                 )
             };
 
-            device
-                .router
-                .attach_conn(conn.source_port(), Arc::downgrade(&Arc::clone(&conn)));
-
             let stream = RusbmuxStream {
                 device,
                 read_buf: BytesMut::new(),
@@ -177,7 +172,7 @@ struct RusbmuxStream {
     device: UsbDeviceShared,
 
     // the connection will shutdown on drop
-    conn: Arc<UsbDeviceConn>,
+    conn: UsbDeviceConn,
 
     read_buf: BytesMut,
 

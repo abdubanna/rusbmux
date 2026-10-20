@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 mod network;
 mod usb;
 
@@ -10,7 +8,7 @@ pub use usb::UsbDeviceConn;
 
 pub enum DeviceConn {
     Network(NetworkDeviceConn),
-    Usb(Arc<UsbDeviceConn>),
+    Usb(UsbDeviceConn),
 }
 
 impl DeviceConn {
@@ -29,7 +27,7 @@ impl DeviceConn {
         }
     }
 
-    pub const fn as_usb(&self) -> Option<&Arc<UsbDeviceConn>> {
+    pub const fn as_usb(&mut self) -> Option<&mut UsbDeviceConn> {
         if let Self::Usb(dev) = self {
             Some(dev)
         } else {
@@ -51,18 +49,17 @@ impl DeviceConn {
         }
     }
 
-    pub async fn close(&self) -> Result<(), RusbmuxError> {
+    pub async fn close(&mut self) -> Result<(), RusbmuxError> {
         match self {
             Self::Usb(dev) => dev.close().await,
             Self::Network(_) => Ok(()),
         }
     }
 
-    pub async fn wait_shutdown(&self) -> Result<(), RusbmuxError> {
+    pub async fn wait_shutdown(&self) {
         match self {
-            Self::Usb(dev) => dev.wait_shutdown().await?,
+            Self::Usb(dev) => dev.wait_shutdown().await,
             Self::Network(dev) => dev.wait_shutdown().await,
         }
-        Ok(())
     }
 }
