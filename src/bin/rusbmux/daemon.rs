@@ -1,4 +1,7 @@
-use crate::handler::LOCKDOWN_PATH;
+use crate::{
+    handler::LOCKDOWN_PATH,
+    watcher::{watch_network_daemon, watch_usb_daemon},
+};
 use rusbmux::error::RusbmuxError;
 use tracing::{error, info, warn};
 
@@ -75,17 +78,34 @@ async fn get_listener(socket_path: &str) -> Result<Listener, RusbmuxError> {
 }
 
 async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
-    // TODO: create the folder with 701 permissions
     tokio::fs::create_dir_all(LOCKDOWN_PATH)
         .await
         .inspect_err(|err| error!(LOCKDOWN_PATH, %err, "Failed to create the lockdown folder"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = tokio::fs::metadata(LOCKDOWN_PATH)
+            .await?
+            .permissions()
+            .mode()
+            & 0o7777;
+
+        if perms != 0o701 {
+            tracing::debug!(
+                old_perms = format!("{perms:o}"),
+                "Changing `{LOCKDOWN_PATH}` permissions to 701"
+            );
+
+            tokio::fs::set_permissions(LOCKDOWN_PATH, std::fs::Permissions::from_mode(0o701))
+                .await?;
+        }
+    }
 
     Ok(())
 }
 
 pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
-    use crate::watcher::{watch_network_daemon, watch_usb_daemon};
-
     let socket = socket.unwrap_or(LISTENER_PATH.to_string());
 
     #[cfg(unix)]

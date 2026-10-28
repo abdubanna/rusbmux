@@ -69,7 +69,6 @@ pub async fn save_pair_record(
 
     trace!(tag, pair_record_id, ?path, "Writing pair record to disk");
 
-    // TODO: permissions
     tokio::fs::write(&path, pair_record_data)
         .await
         .inspect_err(|err| {
