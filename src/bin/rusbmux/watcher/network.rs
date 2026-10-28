@@ -4,15 +4,14 @@ use futures::StreamExt;
 use idevice::pairing_file::PairingFile;
 use rusbmux::{
     error::RusbmuxError,
-    watcher::{NetworkEvent, watch_network},
+    watcher::{NetworkEvent, PairingFiles, watch_network},
 };
 use tracing::{debug, error, warn};
 
 use crate::{handler::LOCKDOWN_PATH, watcher::DeviceEvent};
 
 pub async fn watch_network_daemon() -> Result<(), RusbmuxError> {
-    let pairing_files_iter = std::iter::once_with(get_saved_pairing_files).flatten();
-    let mut watcher = watch_network(pairing_files_iter);
+    let mut watcher = watch_network(PairingFiles::dynamic(get_saved_pairing_files));
 
     while let Some(event) = watcher.next().await {
         match event {
