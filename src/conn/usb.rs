@@ -1,16 +1,14 @@
 use bytes::Bytes;
 use crossfire::{MAsyncTx, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
-    device::{core::DeviceCore, packet_router::SAsyncPacketRx, usb::UsbDevice},
+    device::{WriterMsg, core::DeviceCore, packet_router::SAsyncPacketRx, usb::UsbDevice},
     error::RusbmuxError,
     parser::device_mux::{AUTO_SEQ, TcpFlags, UsbDevicePacket},
     usb_backend::MAX_PACKET_PAYLOAD_SIZE,
 };
-
-use std::sync::atomic::AtomicBool;
 
 #[derive(Debug)]
 pub struct ConnState {
@@ -25,7 +23,7 @@ impl ConnState {
         source_port: u16,
         destination_port: u16,
         rx: &SAsyncPacketRx,
-        tx: &MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+        tx: &MAsyncTx<mpsc::Array<WriterMsg>>,
     ) -> Result<Self, RusbmuxError> {
         let mut sent_bytes = 0;
         let mut received_bytes = 0;
@@ -45,7 +43,7 @@ impl ConnState {
 
         // let tcp_syn_header = tcp_syn.header;
 
-        tx.send(tcp_syn).await?;
+        tx.send(WriterMsg::Packet(tcp_syn)).await?;
         trace!(source_port, destination_port, "Sent SYN");
 
         let tcp_syn_ack = rx.recv().await?;
@@ -99,7 +97,7 @@ impl ConnState {
             )
             .build();
 
-        tx.send(tcp_ack).await?;
+        tx.send(WriterMsg::Packet(tcp_ack)).await?;
 
         trace!(source_port, destination_port, "Sent ACK");
 
@@ -141,9 +139,9 @@ pub struct UsbDeviceConn {
 
     conn_state: ConnState,
     rx: SAsyncPacketRx,
-    tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+    tx: MAsyncTx<mpsc::Array<WriterMsg>>,
 
-    dropped: AtomicBool,
+    dropped: bool,
 }
 
 impl UsbDeviceConn {
@@ -159,7 +157,7 @@ impl UsbDeviceConn {
         source_port: u16,
         conn_state: ConnState,
         rx: SAsyncPacketRx,
-        tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+        tx: MAsyncTx<mpsc::Array<WriterMsg>>,
     ) -> Self {
         let sendable_bytes = conn_state.calc_sendable_bytes();
 
@@ -171,7 +169,7 @@ impl UsbDeviceConn {
             conn_state,
             rx,
             tx,
-            dropped: AtomicBool::new(false),
+            dropped: false,
         }
     }
 
@@ -180,7 +178,7 @@ impl UsbDeviceConn {
         source_port: u16,
         destination_port: u16,
         rx: SAsyncPacketRx,
-        tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+        tx: MAsyncTx<mpsc::Array<WriterMsg>>,
     ) -> Result<Self, RusbmuxError> {
         let conn_state =
             ConnState::perform_handshake(source_port, destination_port, &rx, &tx).await?;
@@ -195,7 +193,7 @@ impl UsbDeviceConn {
             conn_state,
             rx,
             tx,
-            dropped: AtomicBool::new(false),
+            dropped: false,
         })
     }
 
@@ -225,7 +223,7 @@ impl UsbDeviceConn {
     async fn send_packet(&mut self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
         let payload_len = packet.payload.len() as u32;
 
-        self.tx.send(packet).await?;
+        self.tx.send(WriterMsg::Packet(packet)).await?;
 
         self.add_sent_bytes(payload_len);
 
@@ -243,6 +241,21 @@ impl UsbDeviceConn {
 
     pub async fn close(&mut self) -> Result<(), RusbmuxError> {
         self.send_rst().await?;
+
+        let (tx, rx) = crossfire::oneshot::oneshot();
+        self.tx.send(WriterMsg::Flush(tx)).await?;
+
+        // NOTE: this future would resolve on either the loop send back, or BOTH of the device's tx
+        // and rx gets dropped, which would drop the whole channel with
+        // its items, thus dropping the tx of this oneshot,
+        // thus waking up the rx.
+        //
+        // The device's rx would definitaly drop on device drop, but the tx is shared
+        // through the UsbDeviceShared and implements clone, so if a UsbDeviceShared is out there
+        // while the device got dropped (triggers a panic in debug build), then this would block
+        // until all clones are dropped
+        let _ = rx.await;
+
         unsafe { self.set_dropped() };
 
         Ok(())
@@ -250,6 +263,12 @@ impl UsbDeviceConn {
 
     pub fn close_blocking(&mut self) -> Result<(), RusbmuxError> {
         self.send_rst_blocking()?;
+
+        let (tx, rx) = crossfire::oneshot::oneshot();
+        self.tx.try_send(WriterMsg::Flush(tx))?;
+        // this would block the loop if they're in the same thread
+        let _ = rx.recv();
+
         unsafe { self.set_dropped() };
 
         Ok(())
@@ -264,7 +283,7 @@ impl UsbDeviceConn {
 
         let rst_packet = self.build_flag(TcpFlags::RST);
 
-        self.tx.try_send(rst_packet)?;
+        self.tx.try_send(WriterMsg::Packet(rst_packet))?;
 
         trace!(
             source_port = self.source_port,
@@ -283,7 +302,7 @@ impl UsbDeviceConn {
 
         let rst_packet = self.build_flag(TcpFlags::RST);
 
-        self.tx.send(rst_packet).await?;
+        self.tx.send(WriterMsg::Packet(rst_packet)).await?;
 
         trace!(
             source_port = self.source_port,
@@ -296,7 +315,7 @@ impl UsbDeviceConn {
     async fn ack(&mut self) -> Result<(), RusbmuxError> {
         let tcp_ack = self.build_flag(TcpFlags::ACK);
 
-        self.tx.send(tcp_ack).await?;
+        self.tx.send(WriterMsg::Packet(tcp_ack)).await?;
 
         self.update_sendable_bytes();
 
@@ -396,7 +415,7 @@ impl UsbDeviceConn {
 
     #[inline]
     pub fn dropped(&self) -> bool {
-        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+        self.dropped
     }
 
     /// # Safety
@@ -404,9 +423,8 @@ impl UsbDeviceConn {
     /// setting the device as dropped would prevent it from a clean shutdown, make sure you already
     /// sent an RST packet
     #[inline]
-    pub unsafe fn set_dropped(&self) {
-        self.dropped
-            .store(true, std::sync::atomic::Ordering::Relaxed)
+    pub unsafe fn set_dropped(&mut self) {
+        self.dropped = true;
     }
 
     #[inline]
@@ -425,7 +443,7 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn get_tx(&self) -> MAsyncTx<crossfire::mpsc::Array<UsbDevicePacket>> {
+    pub fn get_tx(&self) -> MAsyncTx<crossfire::mpsc::Array<WriterMsg>> {
         self.tx.clone()
     }
 
@@ -437,8 +455,40 @@ impl UsbDeviceConn {
 
 impl Drop for UsbDeviceConn {
     fn drop(&mut self) {
-        if !self.dropped() {
-            let _ = self.close_blocking();
+        if self.dropped() {
+            return;
+        }
+
+        if self.device_core.canceler.is_cancelled() {
+            debug!(
+                source_port = self.source_port,
+                "Connection dropped after the device was dropped"
+            );
+            return;
+        } else {
+            warn!(
+                source_port = self.source_port,
+                "Connection dropped without an explicit close"
+            );
+        }
+
+        // can't flush in drop, because if both the connection and the device loop are in the
+        // same thread, it's a deadlock
+        if let Err(err) = self.send_rst_blocking() {
+            match err {
+                RusbmuxError::Channel(crate::error::ChannelError::UsbSend(_)) => {
+                    debug!(
+                        "Failed to send RST because the device may already be gone; \
+                         this is expected if `close_all` or `shutdown` was called"
+                    );
+                }
+                err => {
+                    debug!(
+                        %err,
+                        "Failed to send RST while dropping the connection"
+                    );
+                }
+            }
         }
     }
 }

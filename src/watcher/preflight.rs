@@ -14,6 +14,7 @@ const REQUEST_HOST_BUID: &str = "com.apple.mobile.lockdown.request_host_buid";
 
 pub async fn preflight(
     device: UsbDeviceShared,
+    // TODO: take a ref
     pairing_file: Option<PairingFile>,
     system_buid: &str,
 ) -> Result<Option<PairingFile>, RusbmuxError> {

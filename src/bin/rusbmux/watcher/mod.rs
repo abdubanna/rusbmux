@@ -48,7 +48,7 @@ pub async fn get_hotplug_event_tx() -> &'static broadcast::Sender<DeviceEvent> {
 
 /// Removes the device from the connected devices and shut it down
 pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
-    let (_, device) = crate::watcher::CONNECTED_DEVICES
+    let (_, mut device) = crate::watcher::CONNECTED_DEVICES
         .remove(&id)
         .ok_or(RusbmuxError::DeviceNotFound(id))?;
     // shutting down the device would also send an RST to the connections opened by the device

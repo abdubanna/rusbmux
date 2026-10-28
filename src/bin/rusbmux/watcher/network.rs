@@ -48,7 +48,7 @@ pub async fn watch_network_daemon() -> Result<(), RusbmuxError> {
             Ok(NetworkEvent::Disconnected(id)) => {
                 debug!(id, "Removing network device");
 
-                let Some((_, device)) = super::CONNECTED_DEVICES.remove(&id) else {
+                let Some((_, mut device)) = super::CONNECTED_DEVICES.remove(&id) else {
                     warn!(
                         id,
                         "Received a network device disconnect that never connected"

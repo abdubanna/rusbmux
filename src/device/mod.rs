@@ -12,7 +12,7 @@ use usb::UsbDevice;
 
 use crate::{
     conn::DeviceConn, device::usb::IODisconnectedDevice, error::RusbmuxError,
-    usb_backend::AnyDeviceInfo,
+    parser::device_mux::UsbDevicePacket, usb_backend::AnyDeviceInfo,
 };
 
 #[derive(Debug)]
@@ -25,6 +25,31 @@ pub enum Device {
 pub enum ConnectionType {
     Usb,
     Network,
+}
+
+pub enum WriterMsg {
+    Packet(UsbDevicePacket),
+    /// it flushes the endpoint, but it could also be used as an indication that every packet
+    /// so far have been processed
+    Flush(crossfire::oneshot::TxOneshot<()>),
+}
+
+impl std::fmt::Debug for WriterMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Packet(p) => write!(f, "WriterMsg({p:?})"),
+            Self::Flush(_) => write!(f, "Flush(..)"),
+        }
+    }
+}
+
+impl WriterMsg {
+    pub const fn as_packet(&self) -> Option<&UsbDevicePacket> {
+        match self {
+            Self::Packet(p) => Some(p),
+            Self::Flush(_) => None,
+        }
+    }
 }
 
 impl Device {
@@ -86,7 +111,7 @@ impl Device {
         ))
     }
 
-    pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
+    pub async fn shutdown(&mut self) -> Result<(), RusbmuxError> {
         match self {
             Self::Usb(dev) => dev.shutdown().await?,
             Self::Network(dev) => dev.shutdown(),

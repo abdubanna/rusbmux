@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::parser::{device_mux::UsbDevicePacket, usbmux::UsbMuxResult};
+use crate::{device::WriterMsg, parser::usbmux::UsbMuxResult};
 
 #[derive(Debug, Error)]
 pub enum RusbmuxError {
@@ -67,7 +67,7 @@ pub enum ChannelError {
     UsbRecv(#[source] crossfire::RecvError),
 
     #[error("Couldn't send a usb packet on the channel")]
-    UsbSend(Box<UsbDevicePacket>),
+    UsbSend(Box<WriterMsg>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,23 +91,17 @@ impl MissingFields {
     }
 }
 
-impl From<crossfire::SendError<UsbDevicePacket>> for RusbmuxError {
-    fn from(err: crossfire::SendError<UsbDevicePacket>) -> Self {
+impl From<crossfire::SendError<WriterMsg>> for RusbmuxError {
+    fn from(err: crossfire::SendError<WriterMsg>) -> Self {
         Self::Channel(ChannelError::UsbSend(Box::new(err.0)))
     }
 }
 
-impl From<crossfire::TrySendError<UsbDevicePacket>> for RusbmuxError {
-    fn from(err: crossfire::TrySendError<UsbDevicePacket>) -> Self {
+impl From<crossfire::TrySendError<WriterMsg>> for RusbmuxError {
+    fn from(err: crossfire::TrySendError<WriterMsg>) -> Self {
         Self::Channel(ChannelError::UsbSend(Box::new(err.into_inner())))
     }
 }
-
-// impl From<tokio::sync::broadcast::error::SendError<DeviceEvent>> for RusbmuxError {
-//     fn from(err: tokio::sync::broadcast::error::SendError<DeviceEvent>) -> Self {
-//         Self::Channel(ChannelError::BroadcastSend(err.0))
-//     }
-// }
 
 impl From<crossfire::RecvError> for RusbmuxError {
     fn from(err: crossfire::RecvError) -> Self {

@@ -149,9 +149,7 @@ pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
         }
     };
 
-    // wait for RST packets, just in case
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
+    // TODO: wait until all connections get their response of closing
     Ok(())
 }
 
@@ -222,7 +220,7 @@ pub async fn wait_shutdown() {
 }
 
 pub async fn cleanup() {
-    for device in &*crate::watcher::CONNECTED_DEVICES {
+    for mut device in crate::watcher::CONNECTED_DEVICES.iter_mut() {
         if let Err(err) = device.shutdown().await {
             error!(id = device.id(), %err, "Failed to shutdown device");
         }

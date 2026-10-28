@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut usb_hotplug = watch_usb(&rusbmux::usb_backend::DEFAULT_BACKEND);
 
     let UsbEvent::Connected {
-        device: Device::Usb(device),
+        device: Device::Usb(mut device),
         id,
     } = usb_hotplug.next().await.unwrap().unwrap()
     else {
@@ -31,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Ok(l) = syslog.next().await {
         println!("{l}");
     }
+
+    device.shutdown().await?;
 
     Ok(())
 }

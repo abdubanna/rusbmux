@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU16, Ordering},
+        atomic::{AtomicU16, Ordering},
     },
 };
 
@@ -16,7 +16,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     conn::UsbDeviceConn,
-    device::{core::DeviceCore, packet_router::PacketRouter},
+    device::{WriterMsg, core::DeviceCore, packet_router::PacketRouter},
     error::{ParseError, RusbmuxError},
     parser::device_mux::{
         AUTO_SEQ, TcpFlags, UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2,
@@ -35,10 +35,11 @@ pub struct IODisconnectedDevice {
 pub struct UsbDeviceShared {
     pub(crate) core: DeviceCore,
     pub(crate) router: Arc<PacketRouter>,
-    writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
+    writer_tx: MAsyncTx<mpsc::Array<WriterMsg>>,
     udid: Option<String>,
 }
 
+// TODO: doc about the drop
 #[derive(Debug)]
 pub struct UsbDevice {
     shared: UsbDeviceShared,
@@ -51,7 +52,8 @@ pub struct UsbDevice {
     reader_loop_handler: JoinHandle<()>,
     writer_loop_handler: JoinHandle<()>,
 
-    dropped: AtomicBool,
+    // TODO: use the canceler
+    dropped: bool,
 }
 
 impl UsbDevice {
@@ -123,26 +125,20 @@ impl UsbDevice {
         let recv_seq = Arc::new(AtomicU16::new(0));
         let recv_seq2 = Arc::clone(&recv_seq);
 
-        let canceler = core.canceler.clone();
-        let canceler2 = core.canceler.clone();
-
         let opaque_id = info.opaque_id();
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler = tokio::spawn(async move {
-            tokio::select! {
-                _ = Self::start_reader_loop(router2, recv_seq2, disconnected_tx,  end_in, id, opaque_id) => {}
-                _ = canceler.cancelled() => {}
-            }
-        });
+        let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
+            router2,
+            recv_seq2,
+            disconnected_tx,
+            end_in,
+            id,
+            opaque_id,
+        ));
 
-        let writer_loop_handler = tokio::spawn(async move {
-            tokio::select! {
-                _ = Self::start_writer_loop(recv_seq, rx, end_out, id) => {}
-                _ = canceler2.cancelled() => {}
-            }
-        });
+        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(recv_seq, rx, end_out, id));
 
         debug!(device_id = id, "Device created");
 
@@ -159,7 +155,7 @@ impl UsbDevice {
             product_id: info.product_id(),
             reader_loop_handler,
             writer_loop_handler,
-            dropped: AtomicBool::new(false),
+            dropped: false,
         })
     }
 
@@ -252,7 +248,7 @@ impl UsbDevice {
 
     async fn start_writer_loop(
         recv_seq: Arc<AtomicU16>,
-        rx: AsyncRx<mpsc::Array<UsbDevicePacket>>,
+        rx: AsyncRx<mpsc::Array<WriterMsg>>,
         mut end_out: AnyEndpointWriter,
         device_id: u64,
     ) {
@@ -265,9 +261,17 @@ impl UsbDevice {
 
         loop {
             trace!(target: "device_writer", device_id, "Waiting for a packet");
-            let Ok(mut packet) = rx.recv().await else {
-                error!(target: "device_writer", device_id, "Writer channel closed");
-                break;
+            let mut packet = match rx.recv().await {
+                Ok(WriterMsg::Packet(p)) => p,
+                Ok(WriterMsg::Flush(tx)) => {
+                    let _ = end_out.flush().await;
+                    tx.send(());
+                    continue;
+                }
+                Err(_) => {
+                    error!(target: "device_writer", device_id, "Writer channel closed");
+                    break;
+                }
             };
 
             debug!(
@@ -334,6 +338,8 @@ impl UsbDevice {
 
             end_out.submit_end();
         }
+
+        let _ = end_out.flush().await;
     }
 
     pub async fn connect(&self, destination_port: u16) -> Result<UsbDeviceConn, RusbmuxError> {
@@ -366,12 +372,12 @@ impl UsbDevice {
     pub async fn close_all(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.shared.core.id, "Closing all connections");
 
-        for conn_entry in self.shared.router.take_all_alive_entries() {
+        for entry in self.shared.router.take_all_alive_entries() {
             let rst_packet = UsbDevicePacket::builder()
                 .header_tcp(AUTO_SEQ, AUTO_SEQ)
                 .tcp_header(
-                    conn_entry.source_port,
-                    conn_entry.destination_port,
+                    entry.source_port,
+                    entry.destination_port,
                     // apparently you can reset the connection with just the src and dst port
                     //
                     // I've already tested this, and yeah I can't send nor recv on the connection aftward,
@@ -386,8 +392,15 @@ impl UsbDevice {
                 .build();
 
             // only fails if the receiver is gone, which means the loop is gone
-            self.shared.writer_tx.send(rst_packet).await?;
+            self.shared
+                .writer_tx
+                .send(WriterMsg::Packet(rst_packet))
+                .await?;
         }
+
+        let (tx, rx) = crossfire::oneshot::oneshot();
+        self.shared.writer_tx.send(WriterMsg::Flush(tx)).await?;
+        let _ = rx.await;
 
         Ok(())
     }
@@ -396,38 +409,54 @@ impl UsbDevice {
         debug!(device_id = self.shared.core.id, "Closing all connections");
 
         let mut first_err = None;
-        for conn_entry in self.shared.router.take_all_alive_entries() {
+        for entry in self.shared.router.take_all_alive_entries() {
             let rst_packet = UsbDevicePacket::builder()
                 .header_tcp(AUTO_SEQ, AUTO_SEQ)
                 .tcp_header(
-                    conn_entry.source_port,
-                    conn_entry.destination_port,
+                    entry.source_port,
+                    entry.destination_port,
                     0,
                     0,
                     TcpFlags::RST,
                 )
                 .build();
 
-            if let Err(err) = self.shared.writer_tx.try_send(rst_packet) {
+            if let Err(err) = self
+                .shared
+                .writer_tx
+                .try_send(WriterMsg::Packet(rst_packet))
+            {
                 first_err.get_or_insert(err);
             }
         }
 
-        match first_err {
-            Some(err) => Err(err.into()),
-            None => Ok(()),
+        if let Some(err) = first_err {
+            return Err(err.into());
         }
+
+        let (tx, rx) = crossfire::oneshot::oneshot();
+        self.shared.writer_tx.try_send(WriterMsg::Flush(tx))?;
+        let _ = rx.recv();
+
+        Ok(())
     }
 
-    #[inline]
-    fn dropped(&self) -> bool {
-        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    pub async fn shutdown(&mut self) -> Result<(), RusbmuxError> {
+        self.shared.core.canceler.cancel();
+        let result = self.close_all().await;
+        self.dropped = true;
+        self.drop_loops();
+
+        result
     }
 
-    #[inline]
-    fn set_dropped(&self) {
-        self.dropped
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+    pub fn shutdown_blocking(&mut self) -> Result<(), RusbmuxError> {
+        self.shared.core.canceler.cancel();
+        let result = self.close_all_blocking();
+        self.dropped = true;
+        self.drop_loops();
+
+        result
     }
 
     fn drop_loops(&self) {
@@ -438,23 +467,28 @@ impl UsbDevice {
         self.writer_loop_handler.abort();
     }
 
-    pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
+    fn abort(&mut self) {
         self.shared.core.canceler.cancel();
-        self.close_all().await?;
-        self.set_dropped();
-        // TODO: make it wait until all packets are sent
+
+        for entry in self.shared.router.take_all_alive_entries() {
+            let rst = UsbDevicePacket::builder()
+                .header_tcp(AUTO_SEQ, AUTO_SEQ)
+                .tcp_header(
+                    entry.source_port,
+                    entry.destination_port,
+                    0,
+                    0,
+                    TcpFlags::RST,
+                )
+                .build();
+
+            if let Err(err) = self.shared.writer_tx.try_send(WriterMsg::Packet(rst)) {
+                debug!(%err, "Failed to send the RST while aborting the device");
+            }
+        }
+
+        // NOTE: does it matter to send an rst if we immediately drop the loops?
         self.drop_loops();
-
-        Ok(())
-    }
-
-    pub fn shutdown_blocking(&self) -> Result<(), RusbmuxError> {
-        self.shared.core.canceler.cancel();
-        self.close_all_blocking()?;
-        self.set_dropped();
-        self.drop_loops();
-
-        Ok(())
     }
 
     #[inline]
@@ -491,8 +525,10 @@ impl Drop for UsbDevice {
             an RusbmuxProvider may still be alive)"
         );
 
-        if !self.dropped() {
-            let _ = self.shutdown_blocking();
+        if !self.dropped {
+            warn!("Device dropped without an explicit shutdown");
+            self.abort();
+            self.dropped = true;
         }
     }
 }
@@ -537,7 +573,7 @@ impl UsbDeviceShared {
         self.core.id
     }
 
-    pub fn get_writer(&self) -> MAsyncTx<crossfire::mpsc::Array<UsbDevicePacket>> {
+    pub fn get_writer(&self) -> MAsyncTx<crossfire::mpsc::Array<WriterMsg>> {
         self.writer_tx.clone()
     }
 
