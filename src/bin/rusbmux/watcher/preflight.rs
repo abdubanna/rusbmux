@@ -44,7 +44,8 @@ async fn run(device: UsbDeviceShared) -> Result<(), RusbmuxError> {
 
     let system_buid = crate::utils::read_system_buid().await?;
 
-    let pairing_file = rusbmux::watcher::preflight(device, pairing_file, &system_buid).await?;
+    let pairing_file =
+        rusbmux::watcher::preflight(device, pairing_file.as_ref(), &system_buid).await?;
 
     if let Some(pf) = pairing_file {
         tokio::fs::write(path, pf.serialize()?).await?;

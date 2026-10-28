@@ -65,7 +65,7 @@ impl RusbmuxProvider {
     pub async fn preflight(&mut self) -> Result<bool, RusbmuxError> {
         if let Some(pairing_file) = crate::watcher::preflight(
             self.device.clone(),
-            self.pairing_file.clone(),
+            self.pairing_file.as_ref(),
             &self.system_buid,
         )
         .await?

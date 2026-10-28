@@ -14,8 +14,7 @@ const REQUEST_HOST_BUID: &str = "com.apple.mobile.lockdown.request_host_buid";
 
 pub async fn preflight(
     device: UsbDeviceShared,
-    // TODO: take a ref
-    pairing_file: Option<PairingFile>,
+    pairing_file: Option<&PairingFile>,
     system_buid: &str,
 ) -> Result<Option<PairingFile>, RusbmuxError> {
     let provider = RusbmuxProvider::new_from(
@@ -32,7 +31,7 @@ pub async fn preflight(
     }
 
     if let Some(pairing_file) = pairing_file {
-        match lockdown.start_session(&pairing_file).await {
+        match lockdown.start_session(pairing_file).await {
             Ok(_) => return Ok(None),
             Err(IdeviceError::InvalidHostID) => {}
             // something is wrong with the pairing file
