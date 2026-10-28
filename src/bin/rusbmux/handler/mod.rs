@@ -117,10 +117,12 @@ async fn handle_message(
         UsbMuxMsgType::MessagePlist => {
             // TODO: implement binary payload
 
-            // TODO: send back badcommand if not plist
-            let payload = usbmux_packet.payload.as_plist().ok_or_else(|| {
-                RusbmuxError::UnexpectedPacket("expected plist payload".to_string())
-            })?;
+            let Some(payload) = usbmux_packet.payload.as_plist() else {
+                send_result(client, UsbMuxResult::BadCommand, usbmux_packet.header.tag).await?;
+                return Err(
+                    RusbmuxError::UnexpectedPacket("expected plist payload".to_string()).into(),
+                );
+            };
 
             debug!(
                 "Received payload: {}",
