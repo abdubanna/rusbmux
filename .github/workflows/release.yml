@@ -195,10 +195,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: |
-            cargo-cross
             cargo-deb
             cargo-generate-rpm
             cargo-about
+
+      - name: Install cross-rs
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Generate third party licenses file
         shell: bash
@@ -208,7 +210,7 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo cross build --release --locked --target ${{ matrix.target }}
+        run: cross build --release --locked --target ${{ matrix.target }}
 
       - name: Package deb
         run: |
